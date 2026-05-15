@@ -9,8 +9,31 @@ permissions:
   contents: write
 
 jobs:
+  check-branch:
+    name: Verify tag is on master
+    runs-on: ubuntu-latest
+    outputs:
+      on_master: ${{ steps.check.outputs.on_master }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if tag commit is reachable from master
+        id: check
+        run: |
+          git fetch origin master
+          if git merge-base --is-ancestor "${{ github.sha }}" origin/master; then
+            echo "on_master=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "on_master=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Tag ${{ github.ref_name }} is not on master — skipping release."
+          fi
+
   test:
     name: Test
+    needs: check-branch
+    if: needs.check-branch.outputs.on_master == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +48,8 @@ jobs:
 
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
-    needs: test
+    needs: [check-branch, test]
+    if: needs.check-branch.outputs.on_master == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -96,7 +120,8 @@ jobs:
 
   release:
     name: Release
-    needs: build
+    needs: [check-branch, build]
+    if: needs.check-branch.outputs.on_master == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
