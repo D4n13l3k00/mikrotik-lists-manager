@@ -20,10 +20,13 @@ var syncCmd = &cobra.Command{
 	Long: `Читает файл (или stdin если '-'), вычисляет diff с текущим состоянием
 address-list на MikroTik и применяет изменения.
 
+При нескольких списках один и тот же файл синхронизируется в каждый список.
+
 Примеры:
-  mikrotik-lists-manager sync vpn.list --host 192.168.1.1 --user admin --list vpn-routes
-  mikrotik-lists-manager sync vpn.list --host 192.168.1.1 --user admin --list vpn-routes --dry-run
-  cat vpn.list | mikrotik-lists-manager sync - --host 192.168.1.1 --user admin --list vpn-routes`,
+  mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes
+  mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -n
+  mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l list1,list2
+  mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l list1 -l list2`,
 	Args: cobra.ExactArgs(1),
 	RunE: runSync,
 }
@@ -32,7 +35,7 @@ func init() {
 	syncCmd.Flags().StringVarP(&syncFlags.host, "host", "H", "", "Адрес MikroTik (host или host:port) [$MT_HOST]")
 	syncCmd.Flags().StringVarP(&syncFlags.user, "user", "u", "", "Имя пользователя API [$MT_USER]")
 	syncCmd.Flags().StringVarP(&syncFlags.pass, "pass", "p", "", "Пароль API [$MT_PASS] (запросит интерактивно если не задан)")
-	syncCmd.Flags().StringVarP(&syncFlags.listName, "list", "l", "", "Имя address-list [$MT_LIST]")
+	syncCmd.Flags().StringArrayVarP(&syncFlags.listNames, "list", "l", nil, "Имя address-list, можно несколько: -l a,b или -l a -l b [$MT_LIST]")
 	syncCmd.Flags().BoolVarP(&syncFlags.skipTLSVerify, "insecure", "k", false, "Не проверять TLS сертификат")
 	syncCmd.Flags().BoolVarP(&syncDryRun, "dry-run", "n", false, "Показать изменения без применения")
 	syncCmd.Flags().StringVarP(&syncFormat, "format", "f", "auto", "Формат входного файла: auto, native, mikrotik")
@@ -41,16 +44,17 @@ func init() {
 func runSync(cmd *cobra.Command, args []string) error {
 	host := resolve(syncFlags.host, "MT_HOST", loadedConfig.Host)
 	user := resolve(syncFlags.user, "MT_USER", loadedConfig.User)
-	listName := resolve(syncFlags.listName, "MT_LIST", loadedConfig.List)
 
 	if host == "" {
-		return fmt.Errorf("--host is required (or set MT_HOST / host in config)")
+		return fmt.Errorf("--host обязателен")
 	}
 	if user == "" {
-		return fmt.Errorf("--user is required (or set MT_USER / user in config)")
+		return fmt.Errorf("--user обязателен")
 	}
-	if listName == "" {
-		return fmt.Errorf("--list is required (or set MT_LIST / list in config)")
+
+	listNames, err := resolveListNames(syncFlags.listNames, loadedConfig.List)
+	if err != nil {
+		return err
 	}
 
 	pass, err := resolvePassword(syncFlags.pass)
@@ -63,11 +67,9 @@ func runSync(cmd *cobra.Command, args []string) error {
 		effectiveFormat = loadedConfig.DefaultFormat
 	}
 
-	filePath := args[0]
-	var content []byte
-	content, err = readFileOrStdin(filePath)
+	content, err := readFileOrStdin(args[0])
 	if err != nil {
-		return fmt.Errorf("reading file: %w", err)
+		return fmt.Errorf("чтение файла: %w", err)
 	}
 
 	entries, err := parseContent(content, effectiveFormat)
@@ -76,24 +78,30 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(syncFlags.skipTLSVerify))
-	output.Header(fmt.Sprintf("Получение списка %q с %s", listName, host))
 
-	current, err := client.GetList(listName)
-	if err != nil {
-		return fmt.Errorf("fetching list: %w", err)
+	for _, listName := range listNames {
+		output.Header(fmt.Sprintf("Синхронизация %q на %s", listName, host))
+
+		current, err := client.GetList(listName)
+		if err != nil {
+			return fmt.Errorf("получение списка %q: %w", listName, err)
+		}
+		output.Info(fmt.Sprintf("На роутере: %d записей, в файле: %d записей", len(current), len(entries)))
+
+		changes := syncer.Diff(entries, current)
+		if len(changes) == 0 {
+			output.Info("Уже синхронизировано.")
+			continue
+		}
+
+		output.Header("Изменения")
+		if syncDryRun {
+			output.Info("(dry run — изменения не будут применены)")
+		}
+
+		if err := syncer.Apply(client, listName, changes, syncDryRun); err != nil {
+			return err
+		}
 	}
-	output.Info(fmt.Sprintf("На роутере: %d записей, в файле: %d записей", len(current), len(entries)))
-
-	changes := syncer.Diff(entries, current)
-	if len(changes) == 0 {
-		output.Info("Уже синхронизировано.")
-		return nil
-	}
-
-	output.Header("Изменения")
-	if syncDryRun {
-		output.Info("(dry run — изменения не будут применены)")
-	}
-
-	return syncer.Apply(client, listName, changes, syncDryRun)
+	return nil
 }

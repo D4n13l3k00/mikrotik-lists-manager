@@ -26,7 +26,7 @@ var appendCmd = &cobra.Command{
 
 Примеры:
   mikrotik-lists-manager append extra.list -H 192.168.1.1 -u admin -l vpn-routes
-  mikrotik-lists-manager append extra.list -H 192.168.1.1 -u admin -l vpn-routes -n`,
+  mikrotik-lists-manager append extra.list -H 192.168.1.1 -u admin -l list1,list2 -n`,
 	Args: cobra.ExactArgs(1),
 	RunE: runAppend,
 }
@@ -35,7 +35,7 @@ func init() {
 	appendCmd.Flags().StringVarP(&appendFlags.host, "host", "H", "", "Адрес MikroTik [$MT_HOST]")
 	appendCmd.Flags().StringVarP(&appendFlags.user, "user", "u", "", "Имя пользователя API [$MT_USER]")
 	appendCmd.Flags().StringVarP(&appendFlags.pass, "pass", "p", "", "Пароль API [$MT_PASS]")
-	appendCmd.Flags().StringVarP(&appendFlags.listName, "list", "l", "", "Имя address-list [$MT_LIST]")
+	appendCmd.Flags().StringArrayVarP(&appendFlags.listNames, "list", "l", nil, "Имя address-list, можно несколько [$MT_LIST]")
 	appendCmd.Flags().BoolVarP(&appendFlags.skipTLSVerify, "insecure", "k", false, "Не проверять TLS сертификат")
 	appendCmd.Flags().BoolVarP(&appendDryRun, "dry-run", "n", false, "Показать изменения без применения")
 	appendCmd.Flags().StringVarP(&appendFormat, "format", "f", "auto", "Формат файла: auto, native, mikrotik")
@@ -44,7 +44,6 @@ func init() {
 func runAppend(cmd *cobra.Command, args []string) error {
 	host := resolve(appendFlags.host, "MT_HOST", loadedConfig.Host)
 	user := resolve(appendFlags.user, "MT_USER", loadedConfig.User)
-	listName := resolve(appendFlags.listName, "MT_LIST", loadedConfig.List)
 
 	if host == "" {
 		return fmt.Errorf("--host обязателен")
@@ -52,8 +51,10 @@ func runAppend(cmd *cobra.Command, args []string) error {
 	if user == "" {
 		return fmt.Errorf("--user обязателен")
 	}
-	if listName == "" {
-		return fmt.Errorf("--list обязателен")
+
+	listNames, err := resolveListNames(appendFlags.listNames, loadedConfig.List)
+	if err != nil {
+		return err
 	}
 
 	pass, err := resolvePassword(appendFlags.pass)
@@ -73,50 +74,50 @@ func runAppend(cmd *cobra.Command, args []string) error {
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(appendFlags.skipTLSVerify))
 
-	current, err := client.GetList(listName)
-	if err != nil {
-		return fmt.Errorf("получение списка: %w", err)
-	}
-
-	// build set of existing addresses
-	existing := make(map[string]bool, len(current))
-	for _, e := range current {
-		existing[strings.ToLower(e.Address)] = true
-	}
-
-	output.Header(fmt.Sprintf("Добавление в %q на %s", listName, host))
-	if appendDryRun {
-		output.Info("(dry run — изменения не будут применены)")
-	}
-
-	added := 0
-	skipped := 0
-	for _, e := range entries {
-		if existing[strings.ToLower(e.Address)] {
-			skipped++
-			continue
+	for _, listName := range listNames {
+		current, err := client.GetList(listName)
+		if err != nil {
+			return fmt.Errorf("получение списка %q: %w", listName, err)
 		}
-		output.Add(e.Address, e.Comment, e.Disabled)
-		if !appendDryRun {
-			if err := client.AddEntry(listName, e.Address, e.Comment, e.Disabled); err != nil {
-				return fmt.Errorf("добавление %s: %w", e.Address, err)
-			}
-		}
-		added++
-	}
 
-	fmt.Println()
-	if added == 0 {
-		output.Info(fmt.Sprintf("Все записи уже есть в списке (%d пропущено).", skipped))
-	} else {
-		msg := fmt.Sprintf("+%d добавлено", added)
-		if skipped > 0 {
-			msg += fmt.Sprintf(", %d уже существовало", skipped)
+		existing := make(map[string]bool, len(current))
+		for _, e := range current {
+			existing[strings.ToLower(e.Address)] = true
 		}
+
+		output.Header(fmt.Sprintf("Добавление в %q на %s", listName, host))
 		if appendDryRun {
-			msg += " (dry run)"
+			output.Info("(dry run — изменения не будут применены)")
 		}
-		output.Info(msg)
+
+		added, skipped := 0, 0
+		for _, e := range entries {
+			if existing[strings.ToLower(e.Address)] {
+				skipped++
+				continue
+			}
+			output.Add(e.Address, e.Comment, e.Disabled)
+			if !appendDryRun {
+				if err := client.AddEntry(listName, e.Address, e.Comment, e.Disabled); err != nil {
+					return fmt.Errorf("добавление %s: %w", e.Address, err)
+				}
+			}
+			added++
+		}
+
+		fmt.Println()
+		if added == 0 {
+			output.Info(fmt.Sprintf("Все записи уже есть в списке (%d пропущено).", skipped))
+		} else {
+			msg := fmt.Sprintf("+%d добавлено", added)
+			if skipped > 0 {
+				msg += fmt.Sprintf(", %d уже существовало", skipped)
+			}
+			if appendDryRun {
+				msg += " (dry run)"
+			}
+			output.Info(msg)
+		}
 	}
 	return nil
 }
@@ -135,7 +136,7 @@ var removeCmd = &cobra.Command{
 
 Примеры:
   mikrotik-lists-manager remove telegram.list -H 192.168.1.1 -u admin -l vpn-routes
-  mikrotik-lists-manager remove telegram.list -H 192.168.1.1 -u admin -l vpn-routes -n`,
+  mikrotik-lists-manager remove telegram.list -H 192.168.1.1 -u admin -l list1,list2 -n`,
 	Args: cobra.ExactArgs(1),
 	RunE: runRemove,
 }
@@ -144,7 +145,7 @@ func init() {
 	removeCmd.Flags().StringVarP(&removeFlags.host, "host", "H", "", "Адрес MikroTik [$MT_HOST]")
 	removeCmd.Flags().StringVarP(&removeFlags.user, "user", "u", "", "Имя пользователя API [$MT_USER]")
 	removeCmd.Flags().StringVarP(&removeFlags.pass, "pass", "p", "", "Пароль API [$MT_PASS]")
-	removeCmd.Flags().StringVarP(&removeFlags.listName, "list", "l", "", "Имя address-list [$MT_LIST]")
+	removeCmd.Flags().StringArrayVarP(&removeFlags.listNames, "list", "l", nil, "Имя address-list, можно несколько [$MT_LIST]")
 	removeCmd.Flags().BoolVarP(&removeFlags.skipTLSVerify, "insecure", "k", false, "Не проверять TLS сертификат")
 	removeCmd.Flags().BoolVarP(&removeDryRun, "dry-run", "n", false, "Показать изменения без применения")
 	removeCmd.Flags().StringVarP(&removeFormat, "format", "f", "auto", "Формат файла: auto, native, mikrotik")
@@ -153,7 +154,6 @@ func init() {
 func runRemove(cmd *cobra.Command, args []string) error {
 	host := resolve(removeFlags.host, "MT_HOST", loadedConfig.Host)
 	user := resolve(removeFlags.user, "MT_USER", loadedConfig.User)
-	listName := resolve(removeFlags.listName, "MT_LIST", loadedConfig.List)
 
 	if host == "" {
 		return fmt.Errorf("--host обязателен")
@@ -161,8 +161,10 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	if user == "" {
 		return fmt.Errorf("--user обязателен")
 	}
-	if listName == "" {
-		return fmt.Errorf("--list обязателен")
+
+	listNames, err := resolveListNames(removeFlags.listNames, loadedConfig.List)
+	if err != nil {
+		return err
 	}
 
 	pass, err := resolvePassword(removeFlags.pass)
@@ -180,7 +182,6 @@ func runRemove(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// build set of addresses to remove
 	toRemove := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		toRemove[strings.ToLower(e.Address)] = true
@@ -188,50 +189,55 @@ func runRemove(cmd *cobra.Command, args []string) error {
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(removeFlags.skipTLSVerify))
 
-	current, err := client.GetList(listName)
-	if err != nil {
-		return fmt.Errorf("получение списка: %w", err)
-	}
-
-	output.Header(fmt.Sprintf("Удаление из %q на %s", listName, host))
-	if removeDryRun {
-		output.Info("(dry run — изменения не будут применены)")
-	}
-
-	removed := 0
-	notFound := 0
-	for _, e := range current {
-		if !toRemove[strings.ToLower(e.Address)] {
-			continue
+	for _, listName := range listNames {
+		current, err := client.GetList(listName)
+		if err != nil {
+			return fmt.Errorf("получение списка %q: %w", listName, err)
 		}
-		output.Remove(e.Address, e.Comment)
-		if !removeDryRun {
-			if err := client.DeleteEntry(e.ID); err != nil {
-				return fmt.Errorf("удаление %s: %w", e.Address, err)
-			}
-		}
-		removed++
-		delete(toRemove, strings.ToLower(e.Address))
-	}
 
-	// warn about addresses from file that weren't found on router
-	for addr := range toRemove {
-		output.Warn(fmt.Sprintf("%s не найден в списке на роутере", addr))
-		notFound++
-	}
-
-	fmt.Println()
-	if removed == 0 && notFound == 0 {
-		output.Info("Нечего удалять.")
-	} else {
-		msg := fmt.Sprintf("−%d удалено", removed)
-		if notFound > 0 {
-			msg += fmt.Sprintf(", %d не найдено на роутере", notFound)
-		}
+		output.Header(fmt.Sprintf("Удаление из %q на %s", listName, host))
 		if removeDryRun {
-			msg += " (dry run)"
+			output.Info("(dry run — изменения не будут применены)")
 		}
-		output.Info(msg)
+
+		// copy to track not-found
+		notFoundSet := make(map[string]bool, len(toRemove))
+		for k := range toRemove {
+			notFoundSet[k] = true
+		}
+
+		removed := 0
+		for _, e := range current {
+			if !toRemove[strings.ToLower(e.Address)] {
+				continue
+			}
+			output.Remove(e.Address, e.Comment)
+			if !removeDryRun {
+				if err := client.DeleteEntry(e.ID); err != nil {
+					return fmt.Errorf("удаление %s: %w", e.Address, err)
+				}
+			}
+			delete(notFoundSet, strings.ToLower(e.Address))
+			removed++
+		}
+
+		for addr := range notFoundSet {
+			output.Warn(fmt.Sprintf("%s не найден в списке на роутере", addr))
+		}
+
+		fmt.Println()
+		if removed == 0 && len(notFoundSet) == 0 {
+			output.Info("Нечего удалять.")
+		} else {
+			msg := fmt.Sprintf("−%d удалено", removed)
+			if len(notFoundSet) > 0 {
+				msg += fmt.Sprintf(", %d не найдено на роутере", len(notFoundSet))
+			}
+			if removeDryRun {
+				msg += " (dry run)"
+			}
+			output.Info(msg)
+		}
 	}
 	return nil
 }
@@ -240,9 +246,13 @@ func runRemove(cmd *cobra.Command, args []string) error {
 
 func readFileOrStdin(path string) ([]byte, error) {
 	if path == "-" {
-		return os.ReadFile("/dev/stdin")
+		return readStdin()
 	}
 	return os.ReadFile(path)
+}
+
+func readStdin() ([]byte, error) {
+	return os.ReadFile("/dev/stdin")
 }
 
 func parseContent(content []byte, format string) ([]parser.Entry, error) {

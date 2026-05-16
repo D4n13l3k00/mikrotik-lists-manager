@@ -18,7 +18,7 @@ type connFlags struct {
 	host          string
 	user          string
 	pass          string
-	listName      string
+	listNames     []string // supports multiple via -l a,b or -l a -l b
 	skipTLSVerify bool
 }
 
@@ -209,6 +209,38 @@ func resolveSkipTLS(flagVal bool) bool {
 		return true
 	}
 	return loadedConfig.SkipTLSVerify
+}
+
+// resolveListNames returns the list of address-list names from flags, env, or config.
+// Supports comma-separated values and repeated flags: -l a,b or -l a -l b
+func resolveListNames(flagVals []string, cfgVal string) ([]string, error) {
+	var raw []string
+	if len(flagVals) > 0 {
+		raw = flagVals
+	} else if v := os.Getenv("MT_LIST"); v != "" {
+		raw = []string{v}
+	} else if cfgVal != "" {
+		raw = []string{cfgVal}
+	}
+
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("--list обязателен (или задайте MT_LIST / list в конфиге)")
+	}
+
+	// split comma-separated values
+	var names []string
+	for _, r := range raw {
+		for _, part := range strings.Split(r, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				names = append(names, part)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("--list не может быть пустым")
+	}
+	return names, nil
 }
 
 var configCmd = &cobra.Command{
