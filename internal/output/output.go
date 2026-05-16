@@ -196,3 +196,14 @@ func Summary(added, removed, updated int, dryRun bool) {
 		fmt.Println(styleSummaryOk.Render("  " + msg + "  "))
 	}
 }
+
+// ListRow prints one row of the `list` command output.
+func ListRow(name string, count int, disabled int) {
+	n := styleAddr.Render(fmt.Sprintf("%-32s", name))
+	c := styleNew.Render(fmt.Sprintf("%4d", count))
+	line := fmt.Sprintf("  %s  %s записей", n, c)
+	if disabled > 0 {
+		line += "  " + styleDis.Render(fmt.Sprintf("(%d off)", disabled))
+	}
+	fmt.Println(line)
+}

@@ -84,6 +84,24 @@ func checkStatus(resp *http.Response) error {
 	return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 }
 
+// GetAllEntries returns all static entries across all address-lists.
+func (c *Client) GetAllEntries() ([]AddressListEntry, error) {
+	path := "/rest/ip/firewall/address-list?" + url.Values{"dynamic": {"false"}}.Encode()
+	resp, err := c.do("GET", path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("GET address-list: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := checkStatus(resp); err != nil {
+		return nil, err
+	}
+	var entries []AddressListEntry
+	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return entries, nil
+}
+
 // GetList returns all static (dynamic=false) entries for the given address-list name.
 func (c *Client) GetList(listName string) ([]AddressListEntry, error) {
 	path := "/rest/ip/firewall/address-list?" + url.Values{

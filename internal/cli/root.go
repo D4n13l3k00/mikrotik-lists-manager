@@ -156,6 +156,7 @@ func init() {
 	rootCmd.AddCommand(removeCmd)
 	rootCmd.AddCommand(exportCmd)
 	rootCmd.AddCommand(optimizeCmd)
+	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(enableCmd)
 	rootCmd.AddCommand(disableCmd)
 	rootCmd.AddCommand(configCmd)
