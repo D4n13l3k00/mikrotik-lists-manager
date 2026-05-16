@@ -9,9 +9,13 @@ CLI утилита для управления firewall address-list на MikroT
 - RouterOS 7.x (REST API)
 - Go 1.21+ для сборки
 
-## Сборка
+## Установка
 
 ```bash
+# скачать готовый бинарь со страницы релизов
+https://github.com/D4n13l3k00/mikrotik-lists-manager/releases
+
+# или собрать из исходников
 git clone https://github.com/D4n13l3k00/mikrotik-lists-manager
 cd mikrotik-lists-manager
 go build -o mikrotik-lists-manager ./cmd/main/
@@ -25,6 +29,9 @@ go build -o mikrotik-lists-manager ./cmd/main/
 
 # применить
 ./mikrotik-lists-manager sync list.lst -H 192.168.1.1 -u admin -l vpn-routes
+
+# посмотреть все списки на роутере
+./mikrotik-lists-manager list -H 192.168.1.1 -u admin
 ```
 
 Пароль будет запрошен интерактивно если не передан флагом `-p`.
@@ -77,6 +84,18 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 
 ---
 
+## Несколько списков
+
+Все команды принимают несколько списков через запятую или повторением флага:
+
+```bash
+./mikrotik-lists-manager sync list.lst -l vpn,blocked
+./mikrotik-lists-manager sync list.lst -l vpn -l blocked
+./mikrotik-lists-manager disable -a -l vpn,blocked,whitelist
+```
+
+---
+
 ## Команды
 
 ### `sync` — полная синхронизация
@@ -84,6 +103,8 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 Читает файл, получает текущий список с роутера, вычисляет diff и приводит список на роутере к точному состоянию файла: добавляет отсутствующие, удаляет лишние, обновляет комментарии и состояние `disabled`.
 
 Если запись в файле без `!`, но на роутере она `disabled=true` — включит обратно.
+
+При 10+ изменениях показывает прогресс-бар. Флаг `-v` включает построчный вывод вместе с баром.
 
 ```
 ./mikrotik-lists-manager sync [file] [флаги]
@@ -94,9 +115,10 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 | `--host` | `-H` | Адрес роутера: `192.168.1.1`, `http://10.0.0.1`, `https://host:8443` |
 | `--user` | `-u` | Имя пользователя API |
 | `--pass` | `-p` | Пароль (если не задан — запросит интерактивно) |
-| `--list` | `-l` | Имя address-list на роутере |
+| `--list` | `-l` | Имя address-list, можно несколько: `-l a,b` или `-l a -l b` |
 | `--format` | `-f` | Формат файла: `auto`, `native`, `mikrotik` (по умолчанию `auto`) |
 | `--dry-run` | `-n` | Показать изменения без применения |
+| `--verbose` | `-v` | Выводить каждую запись даже при прогресс-баре |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
@@ -105,6 +127,9 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 
 # dry-run — только посмотреть diff
 ./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -n
+
+# синхронизировать в несколько списков
+./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn,blocked
 
 # роутер на HTTP
 ./mikrotik-lists-manager sync vpn.list -H http://192.168.1.1 -u admin -l vpn-routes
@@ -115,8 +140,29 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 # из stdin
 cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-routes
 
-# явно указать формат
-./mikrotik-lists-manager sync backup.rsc -H 192.168.1.1 -u admin -l vpn-routes -f mikrotik
+# с подробным выводом при большом списке
+./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -v
+```
+
+---
+
+### `list` — просмотр списков на роутере
+
+Показывает все address-list на роутере с количеством записей и сколько из них отключено.
+
+```
+./mikrotik-lists-manager list [флаги]
+```
+
+| Флаг | Короткий | Описание |
+|------|----------|----------|
+| `--host` | `-H` | Адрес роутера |
+| `--user` | `-u` | Имя пользователя API |
+| `--pass` | `-p` | Пароль |
+| `--insecure` | `-k` | Не проверять TLS сертификат |
+
+```bash
+./mikrotik-lists-manager list -H 192.168.1.1 -u admin
 ```
 
 ---
@@ -134,7 +180,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--host` | `-H` | Адрес роутера |
 | `--user` | `-u` | Имя пользователя API |
 | `--pass` | `-p` | Пароль |
-| `--list` | `-l` | Имя address-list |
+| `--list` | `-l` | Имя address-list, можно несколько |
 | `--format` | `-f` | Формат файла: `auto`, `native`, `mikrotik` |
 | `--dry-run` | `-n` | Показать изменения без применения |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
@@ -143,8 +189,8 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 # добавить новые записи, дубли пропустить
 ./mikrotik-lists-manager append extra.list -H 192.168.1.1 -u admin -l vpn-routes
 
-# посмотреть что добавится
-./mikrotik-lists-manager append extra.list -H 192.168.1.1 -u admin -l vpn-routes -n
+# добавить в несколько списков сразу
+./mikrotik-lists-manager append extra.list -H 192.168.1.1 -u admin -l vpn,blocked
 ```
 
 ---
@@ -162,7 +208,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--host` | `-H` | Адрес роутера |
 | `--user` | `-u` | Имя пользователя API |
 | `--pass` | `-p` | Пароль |
-| `--list` | `-l` | Имя address-list |
+| `--list` | `-l` | Имя address-list, можно несколько |
 | `--format` | `-f` | Формат файла: `auto`, `native`, `mikrotik` |
 | `--dry-run` | `-n` | Показать изменения без применения |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
@@ -179,7 +225,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 ### `export` — экспорт
 
-Получает текущий список с роутера и выводит его в stdout или файл.
+Получает текущий список с роутера и выводит его в stdout или файл. При нескольких списках и `-o` все списки записываются в один файл подряд.
 
 ```
 ./mikrotik-lists-manager export [флаги]
@@ -190,7 +236,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--host` | `-H` | Адрес роутера |
 | `--user` | `-u` | Имя пользователя API |
 | `--pass` | `-p` | Пароль |
-| `--list` | `-l` | Имя address-list |
+| `--list` | `-l` | Имя address-list, можно несколько |
 | `--format` | `-f` | Формат вывода: `native` (по умолчанию), `mikrotik` |
 | `--output` | `-o` | Записать в файл вместо stdout |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
@@ -199,8 +245,8 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 # вывести в терминал
 ./mikrotik-lists-manager export -H 192.168.1.1 -u admin -l vpn-routes
 
-# сохранить в файл
-./mikrotik-lists-manager export -H 192.168.1.1 -u admin -l vpn-routes -o vpn.list
+# сохранить несколько списков в один файл
+./mikrotik-lists-manager export -H 192.168.1.1 -u admin -l vpn,blocked -o backup.list
 
 # сохранить в формате MikroTik export
 ./mikrotik-lists-manager export -H 192.168.1.1 -u admin -l vpn-routes -f mikrotik -o backup.rsc
@@ -223,7 +269,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--host` | `-H` | Адрес роутера |
 | `--user` | `-u` | Имя пользователя API |
 | `--pass` | `-p` | Пароль |
-| `--list` | `-l` | Имя address-list |
+| `--list` | `-l` | Имя address-list, можно несколько |
 | `--all` | `-a` | Применить ко всем записям списка |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
@@ -234,8 +280,8 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 # включить конкретные записи
 ./mikrotik-lists-manager enable 8.8.8.8 -H 192.168.1.1 -u admin -l vpn-routes
 
-# отключить весь список целиком
-./mikrotik-lists-manager disable -a -H 192.168.1.1 -u admin -l vpn-routes
+# отключить несколько списков целиком
+./mikrotik-lists-manager disable -a -H 192.168.1.1 -u admin -l vpn,blocked
 
 # включить весь список
 ./mikrotik-lists-manager enable -a -H 192.168.1.1 -u admin -l vpn-routes
@@ -313,6 +359,7 @@ default_format: auto
 ```bash
 ./mikrotik-lists-manager sync list.lst -n
 ./mikrotik-lists-manager sync list.lst
+./mikrotik-lists-manager list
 ./mikrotik-lists-manager append extra.list
 ./mikrotik-lists-manager remove telegram.list -n
 ./mikrotik-lists-manager export -o backup.list
@@ -336,7 +383,7 @@ export MT_USER=admin
 export MT_LIST=vpn-routes
 
 ./mikrotik-lists-manager sync list.lst -n
-./mikrotik-lists-manager append extra.list
+./mikrotik-lists-manager list
 ./mikrotik-lists-manager disable -a
 ```
 
@@ -365,6 +412,7 @@ mikrotik-lists-manager/
     │   ├── sync.go              — команда sync
     │   ├── append_remove.go     — команды append / remove
     │   ├── export.go            — команда export
+    │   ├── list.go              — команда list
     │   ├── toggle.go            — команды enable / disable
     │   └── optimize.go          — команда optimize
     ├── config/
@@ -380,7 +428,7 @@ mikrotik-lists-manager/
     │   ├── parser.go            — парсинг native и mikrotik форматов
     │   └── parser_test.go
     └── syncer/
-        └── syncer.go            — diff логика и применение изменений
+        └── syncer.go            — diff логика, прогресс-бар, применение изменений
 ```
 
 ---
