@@ -1,27 +1,48 @@
-# mikrotik-lists-manager
+# 🛠 mikrotik-lists-manager
 
 CLI утилита для управления firewall address-list на MikroTik из локального файла.
 
 Подключается к роутеру через REST API (RouterOS 7+), сравнивает текущее состояние списка с файлом и приводит его к нужному виду — добавляет, удаляет, обновляет и включает/отключает записи. Динамические записи (`dynamic=true`) не трогает.
 
-## Требования
+## Содержание
 
-- RouterOS 7.x (REST API)
-- Go 1.21+ для сборки
+- [Установка](#установка)
+- [Быстрый старт](#быстрый-старт)
+- [Формат файла](#формат-файла)
+- [Несколько списков](#несколько-списков)
+- [Команды](#команды)
+  - [sync](#sync--полная-синхронизация)
+  - [list](#list--просмотр-списков-на-роутере)
+  - [append](#append--добавление-записей)
+  - [remove](#remove--удаление-записей-по-файлу)
+  - [export](#export--экспорт)
+  - [enable / disable](#enable--disable--включение-и-отключение)
+  - [optimize](#optimize--оптимизация-файла)
+  - [config](#config--управление-конфигом)
+- [Конфигурационный файл](#конфигурационный-файл)
+- [Переменные окружения](#переменные-окружения)
+- [Сравнение команд](#сравнение-команд)
+- [Настройка MikroTik](#настройка-mikrotik)
 
-## Установка
+---
+
+## 📦 Установка
+
+Скачать готовый бинарь для своей платформы со [страницы релизов](https://github.com/D4n13l3k00/mikrotik-lists-manager/releases).
+
+Или собрать из исходников:
 
 ```bash
-# скачать готовый бинарь со страницы релизов
-https://github.com/D4n13l3k00/mikrotik-lists-manager/releases
-
-# или собрать из исходников
 git clone https://github.com/D4n13l3k00/mikrotik-lists-manager
 cd mikrotik-lists-manager
 go build -o mikrotik-lists-manager ./cmd/main/
 ```
 
-## Быстрый старт
+**Требования:** RouterOS 7.x (REST API), Go 1.21+ для сборки.
+
+---
+
+## 🚀 Быстрый старт
 
 ```bash
 # посмотреть что изменится, не применяя
@@ -38,7 +59,7 @@ go build -o mikrotik-lists-manager ./cmd/main/
 
 ---
 
-## Формат файла
+## 📄 Формат файла
 
 Поддерживаются два формата.
 
@@ -54,7 +75,7 @@ go build -o mikrotik-lists-manager ./cmd/main/
 
 `##` может стоять в начале строки (применяется к следующей записи) или inline после адреса.
 
-```
+```text
 # это заметка только для себя — в MikroTik не уйдёт
 
 ## GOOGLE DNS
@@ -73,7 +94,7 @@ go build -o mikrotik-lists-manager ./cmd/main/
 
 Формат вывода команды `/export` на роутере. Удобно для импорта существующего списка.
 
-```
+```routeros
 /ip firewall address-list
 add list=vpn-routes address=8.8.8.8 comment="GOOGLE DNS"
 add list=vpn-routes address=1.1.1.1 comment="CLOUDFLARE DNS"
@@ -84,7 +105,7 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 
 ---
 
-## Несколько списков
+## 🗂 Несколько списков
 
 Все команды принимают несколько списков через запятую или повторением флага:
 
@@ -96,17 +117,16 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 
 ---
 
-## Команды
+## 📋 Команды
 
 ### `sync` — полная синхронизация
 
 Читает файл, получает текущий список с роутера, вычисляет diff и приводит список на роутере к точному состоянию файла: добавляет отсутствующие, удаляет лишние, обновляет комментарии и состояние `disabled`.
 
 Если запись в файле без `!`, но на роутере она `disabled=true` — включит обратно.
-
 При 10+ изменениях показывает прогресс-бар. Флаг `-v` включает построчный вывод вместе с баром.
 
-```
+```shell
 ./mikrotik-lists-manager sync [file] [флаги]
 ```
 
@@ -150,7 +170,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 Показывает все address-list на роутере с количеством записей и сколько из них отключено.
 
-```
+```shell
 ./mikrotik-lists-manager list [флаги]
 ```
 
@@ -171,7 +191,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 Добавляет в список на роутере только те записи из файла, которых там ещё нет. Существующие записи не трогает и не обновляет.
 
-```
+```shell
 ./mikrotik-lists-manager append [file] [флаги]
 ```
 
@@ -199,7 +219,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 Удаляет с роутера только те записи, которые перечислены в файле. Остальные записи в списке не трогает. Если адрес из файла не найден на роутере — выводит предупреждение.
 
-```
+```shell
 ./mikrotik-lists-manager remove [file] [флаги]
 ```
 
@@ -227,7 +247,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 Получает текущий список с роутера и выводит его в stdout или файл. При нескольких списках и `-o` все списки записываются в один файл подряд.
 
-```
+```shell
 ./mikrotik-lists-manager export [флаги]
 ```
 
@@ -259,7 +279,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 Включает или отключает конкретные записи или весь список на роутере.
 **Не изменяет локальный файл** — только состояние на роутере.
 
-```
+```shell
 ./mikrotik-lists-manager enable [адрес...] [флаги]
 ./mikrotik-lists-manager disable [адрес...] [флаги]
 ```
@@ -297,7 +317,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 По умолчанию выводит результат в stdout. С флагом `-w` перезаписывает файл.
 
-```
+```shell
 ./mikrotik-lists-manager optimize [file] [флаги]
 ```
 
@@ -338,7 +358,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 ---
 
-## Конфигурационный файл
+## ⚙️ Конфигурационный файл
 
 Утилита ищет `.mikrotik-lists-manager.yaml` в текущей директории. Путь можно переопределить флагом `--config`.
 
@@ -368,7 +388,7 @@ default_format: auto
 
 ---
 
-## Переменные окружения
+## 🌍 Переменные окружения
 
 | Переменная | Флаг |
 |------------|------|
@@ -389,7 +409,7 @@ export MT_LIST=vpn-routes
 
 ---
 
-## Сравнение команд
+## 🔍 Сравнение команд
 
 | Команда | Добавляет | Удаляет | Обновляет | Трогает только из файла |
 |---------|-----------|---------|-----------|------------------------|
@@ -399,53 +419,25 @@ export MT_LIST=vpn-routes
 
 ---
 
-## Структура проекта
-
-```
-mikrotik-lists-manager/
-├── cmd/
-│   └── main/
-│       └── main.go              — точка входа
-└── internal/
-    ├── cli/
-    │   ├── root.go              — cobra root, config команды, кастомный help
-    │   ├── sync.go              — команда sync
-    │   ├── append_remove.go     — команды append / remove
-    │   ├── export.go            — команда export
-    │   ├── list.go              — команда list
-    │   ├── toggle.go            — команды enable / disable
-    │   └── optimize.go          — команда optimize
-    ├── config/
-    │   └── config.go            — загрузка/сохранение YAML конфига
-    ├── mikrotik/
-    │   └── client.go            — REST API клиент
-    ├── optimizer/
-    │   └── optimizer.go         — дедупликация и суммаризация подсетей
-    ├── output/
-    │   └── output.go            — цветной вывод (lipgloss)
-    ├── parser/
-    │   ├── entry.go             — тип Entry
-    │   ├── parser.go            — парсинг native и mikrotik форматов
-    │   └── parser_test.go
-    └── syncer/
-        └── syncer.go            — diff логика, прогресс-бар, применение изменений
-```
-
----
-
-## Настройка MikroTik
+## 🔧 Настройка MikroTik
 
 Для работы REST API нужен пользователь с правами на чтение/запись firewall:
 
-```
+```routeros
 /user group add name=api-sync policy=read,write,api,rest-api
 /user add name=sync group=api-sync password=yourpassword
 ```
 
 REST API включён по умолчанию в RouterOS 7. Проверить активные сервисы:
 
-```
+```routeros
 /ip service print
 ```
 
 Должен быть активен `www-ssl` (порт 443) или `www` (порт 80).
+
+---
+
+## 📜 Лицензия
+
+[MIT](LICENSE)
