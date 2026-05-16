@@ -171,7 +171,7 @@ func TestApplyExecutesChanges(t *testing.T) {
 		{Action: syncer.ActionUpdate, Address: "9.9.9.9", ID: "*2", NewComment: "NEW"},
 	}
 
-	if err := syncer.Apply(client, "test", changes, false); err != nil {
+	if err := syncer.Apply(client, "test", changes, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.added) != 1 || client.added[0] != "8.8.8.8" {
@@ -192,7 +192,7 @@ func TestApplyDryRunSkipsAPI(t *testing.T) {
 		{Action: syncer.ActionDelete, ID: "*1"},
 	}
 
-	if err := syncer.Apply(client, "test", changes, true); err != nil {
+	if err := syncer.Apply(client, "test", changes, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.added)+len(client.deleted)+len(client.updated) != 0 {
@@ -205,7 +205,7 @@ func TestApplyPropagatesError(t *testing.T) {
 	changes := []syncer.Change{
 		{Action: syncer.ActionAdd, Address: "8.8.8.8"},
 	}
-	if err := syncer.Apply(client, "test", changes, false); err == nil {
+	if err := syncer.Apply(client, "test", changes, false, false); err == nil {
 		t.Error("expected error, got nil")
 	}
 }

@@ -13,6 +13,7 @@ import (
 var syncFlags connFlags
 var syncDryRun bool
 var syncFormat string
+var syncVerbose bool
 
 var syncCmd = &cobra.Command{
 	Use:   "sync [file]",
@@ -39,6 +40,7 @@ func init() {
 	syncCmd.Flags().BoolVarP(&syncFlags.skipTLSVerify, "insecure", "k", false, "Не проверять TLS сертификат")
 	syncCmd.Flags().BoolVarP(&syncDryRun, "dry-run", "n", false, "Показать изменения без применения")
 	syncCmd.Flags().StringVarP(&syncFormat, "format", "f", "auto", "Формат входного файла: auto, native, mikrotik")
+	syncCmd.Flags().BoolVarP(&syncVerbose, "verbose", "v", false, "Выводить каждую запись даже при прогресс-баре")
 }
 
 func runSync(cmd *cobra.Command, args []string) error {
@@ -99,7 +101,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			output.Info("(dry run — изменения не будут применены)")
 		}
 
-		if err := syncer.Apply(client, listName, changes, syncDryRun); err != nil {
+		if err := syncer.Apply(client, listName, changes, syncDryRun, syncVerbose); err != nil {
 			return err
 		}
 	}

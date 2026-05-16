@@ -2,18 +2,24 @@ package syncer
 
 import (
 	"fmt"
+	"os"
+
+	"github.com/schollz/progressbar/v3"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/parser"
 )
 
+// progressThreshold is the minimum number of changes before a progress bar is shown.
+const progressThreshold = 10
+
 type Action int
 
 const (
 	ActionAdd Action = iota
 	ActionDelete
-	ActionUpdate  // comment or disabled changed
+	ActionUpdate // comment or disabled changed
 )
 
 // Change describes a single planned change.
@@ -84,10 +90,33 @@ func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) []Change 
 }
 
 // Apply executes the changes against MikroTik. If dryRun is true, only prints.
-func Apply(client APIClient, listName string, changes []Change, dryRun bool) error {
+// When len(changes) >= progressThreshold, shows a progress bar instead of per-entry output.
+// If verbose is true, per-entry output is shown alongside the progress bar.
+func Apply(client APIClient, listName string, changes []Change, dryRun, verbose bool) error {
 	if len(changes) == 0 {
 		output.Summary(0, 0, 0, dryRun)
 		return nil
+	}
+
+	useProgress := len(changes) >= progressThreshold && !dryRun
+	showPerEntry := !useProgress || verbose
+
+	var bar *progressbar.ProgressBar
+	if useProgress {
+		bar = progressbar.NewOptions(len(changes),
+			progressbar.OptionSetWriter(os.Stderr),
+			progressbar.OptionEnableColorCodes(true),
+			progressbar.OptionSetWidth(40),
+			progressbar.OptionShowCount(),
+			progressbar.OptionSetDescription("[cyan]Применение изменений...[reset]"),
+			progressbar.OptionSetTheme(progressbar.Theme{
+				Saucer:        "[green]=[reset]",
+				SaucerHead:    "[green]>[reset]",
+				SaucerPadding: " ",
+				BarStart:      "[",
+				BarEnd:        "]",
+			}),
+		)
 	}
 
 	var added, removed, updated int
@@ -95,7 +124,9 @@ func Apply(client APIClient, listName string, changes []Change, dryRun bool) err
 	for _, ch := range changes {
 		switch ch.Action {
 		case ActionAdd:
-			output.Add(ch.Address, ch.NewComment, ch.NewDisabled)
+			if showPerEntry {
+				output.Add(ch.Address, ch.NewComment, ch.NewDisabled)
+			}
 			if !dryRun {
 				if err := client.AddEntry(listName, ch.Address, ch.NewComment, ch.NewDisabled); err != nil {
 					return fmt.Errorf("add %s: %w", ch.Address, err)
@@ -103,7 +134,9 @@ func Apply(client APIClient, listName string, changes []Change, dryRun bool) err
 			}
 			added++
 		case ActionDelete:
-			output.Remove(ch.Address, "")
+			if showPerEntry {
+				output.Remove(ch.Address, "")
+			}
 			if !dryRun {
 				if err := client.DeleteEntry(ch.ID); err != nil {
 					return fmt.Errorf("delete %s: %w", ch.Address, err)
@@ -111,7 +144,9 @@ func Apply(client APIClient, listName string, changes []Change, dryRun bool) err
 			}
 			removed++
 		case ActionUpdate:
-			output.Update(ch.Address, ch.OldComment, ch.NewComment, ch.OldDisabled, ch.NewDisabled)
+			if showPerEntry {
+				output.Update(ch.Address, ch.OldComment, ch.NewComment, ch.OldDisabled, ch.NewDisabled)
+			}
 			if !dryRun {
 				if err := client.UpdateEntry(ch.ID, ch.NewComment, ch.NewDisabled); err != nil {
 					return fmt.Errorf("update %s: %w", ch.Address, err)
@@ -119,6 +154,13 @@ func Apply(client APIClient, listName string, changes []Change, dryRun bool) err
 			}
 			updated++
 		}
+		if useProgress {
+			bar.Add(1) //nolint:errcheck
+		}
+	}
+
+	if useProgress {
+		fmt.Fprintln(os.Stderr) // newline after bar
 	}
 
 	output.Summary(added, removed, updated, dryRun)
