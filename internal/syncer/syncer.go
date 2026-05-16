@@ -90,8 +90,8 @@ func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) []Change 
 }
 
 // Apply executes the changes against MikroTik. If dryRun is true, only prints.
-// When len(changes) >= progressThreshold, shows a progress bar instead of per-entry output.
-// If verbose is true, per-entry output is shown alongside the progress bar.
+// When len(changes) >= progressThreshold, shows a progress bar.
+// If verbose is true, per-entry lines are printed above the bar without interleaving.
 func Apply(client APIClient, listName string, changes []Change, dryRun, verbose bool) error {
 	if len(changes) == 0 {
 		output.Summary(0, 0, 0, dryRun)
@@ -99,7 +99,6 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 	}
 
 	useProgress := len(changes) >= progressThreshold && !dryRun
-	showPerEntry := !useProgress || verbose
 
 	var bar *progressbar.ProgressBar
 	if useProgress {
@@ -119,14 +118,25 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 		)
 	}
 
+	// printEntry clears the bar, prints the line, then redraws the bar so
+	// text and bar never appear on the same line.
+	printEntry := func(fn func()) {
+		if useProgress && verbose {
+			bar.Clear()        //nolint:errcheck
+			fn()
+			bar.RenderBlank() //nolint:errcheck
+		} else if !useProgress {
+			fn()
+		}
+		// useProgress && !verbose: skip per-entry output entirely
+	}
+
 	var added, removed, updated int
 
 	for _, ch := range changes {
 		switch ch.Action {
 		case ActionAdd:
-			if showPerEntry {
-				output.Add(ch.Address, ch.NewComment, ch.NewDisabled)
-			}
+			printEntry(func() { output.Add(ch.Address, ch.NewComment, ch.NewDisabled) })
 			if !dryRun {
 				if err := client.AddEntry(listName, ch.Address, ch.NewComment, ch.NewDisabled); err != nil {
 					return fmt.Errorf("add %s: %w", ch.Address, err)
@@ -134,9 +144,7 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 			}
 			added++
 		case ActionDelete:
-			if showPerEntry {
-				output.Remove(ch.Address, "")
-			}
+			printEntry(func() { output.Remove(ch.Address, "") })
 			if !dryRun {
 				if err := client.DeleteEntry(ch.ID); err != nil {
 					return fmt.Errorf("delete %s: %w", ch.Address, err)
@@ -144,9 +152,9 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 			}
 			removed++
 		case ActionUpdate:
-			if showPerEntry {
+			printEntry(func() {
 				output.Update(ch.Address, ch.OldComment, ch.NewComment, ch.OldDisabled, ch.NewDisabled)
-			}
+			})
 			if !dryRun {
 				if err := client.UpdateEntry(ch.ID, ch.NewComment, ch.NewDisabled); err != nil {
 					return fmt.Errorf("update %s: %w", ch.Address, err)
@@ -160,7 +168,7 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 	}
 
 	if useProgress {
-		fmt.Fprintln(os.Stderr) // newline after bar
+		fmt.Fprintln(os.Stderr)
 	}
 
 	output.Summary(added, removed, updated, dryRun)
