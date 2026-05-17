@@ -18,6 +18,7 @@ CLI утилита для управления firewall address-list на MikroT
   - [export](#export--экспорт)
   - [enable / disable](#enable--disable--включение-и-отключение)
   - [optimize](#optimize--оптимизация-файла)
+  - [fetch](#fetch--автозагрузка-cidr-диапазонов)
   - [config](#config--управление-конфигом)
 - [Конфигурационный файл](#конфигурационный-файл)
 - [Переменные окружения](#переменные-окружения)
@@ -53,6 +54,9 @@ go build -o mikrotik-lists-manager ./cmd/main/
 
 # посмотреть все списки на роутере
 ./mikrotik-lists-manager list -H 192.168.1.1 -u admin
+
+# скачать актуальные CIDR от провайдеров
+./mikrotik-lists-manager fetch -o ranges.lst
 ```
 
 Пароль будет запрошен интерактивно если не передан флагом `-p`.
@@ -311,9 +315,10 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 ### `optimize` — оптимизация файла
 
-Читает native `.list` файл и удаляет:
-- дублирующиеся адреса и домены
-- IP/CIDR которые полностью покрываются более широкой подсетью в том же файле
+Читает native `.list` файл и выполняет:
+- удаление дублирующихся адресов и доменов
+- удаление IP/CIDR которые полностью покрываются более широкой подсетью
+- конвертацию `x.x.x.x/32` в `x.x.x.x`
 
 По умолчанию выводит результат в stdout. С флагом `-w` перезаписывает файл.
 
@@ -326,12 +331,69 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--write` | `-w` | Перезаписать файл вместо вывода в stdout |
 
 ```bash
-# посмотреть что будет удалено
+# посмотреть что будет изменено
 ./mikrotik-lists-manager optimize list.lst
 
 # применить оптимизацию
 ./mikrotik-lists-manager optimize list.lst -w
 ```
+
+---
+
+### `fetch` — автозагрузка CIDR-диапазонов
+
+Скачивает актуальные IPv4 CIDR-диапазоны из публичных источников и сохраняет в native `.lst` файл с секциями по провайдерам.
+
+Без флагов запускает интерактивный TUI для выбора провайдеров и сервисов.
+
+```shell
+./mikrotik-lists-manager fetch [флаги]
+```
+
+| Флаг | Короткий | Описание |
+|------|----------|----------|
+| `--output` | `-o` | Путь к выходному файлу (обязательный) |
+| `--provider` | `-p` | Провайдеры: `-p cloudflare,google` или `-p cloudflare -p google` |
+| `--all` | `-a` | Скачать все провайдеры без интерактивного выбора |
+| `--timeout` | `-t` | Таймаут HTTP-запроса в секундах (по умолчанию 30) |
+
+**Доступные провайдеры:**
+
+| Провайдер | Slug | Источник |
+|-----------|------|----------|
+| Cloudflare | `cloudflare` | cloudflare.com/ips-v4 |
+| Google | `google` | gstatic.com (goog.json + cloud.json) |
+| AWS | `aws` | ip-ranges.amazonaws.com |
+| Azure | `azure` | Microsoft Download Center |
+| Fastly | `fastly` | api.fastly.com/public-ip-list |
+| Telegram | `telegram` | core.telegram.org/resources/cidr.txt |
+| GitHub | `github` | api.github.com/meta (выбор сервисов) |
+| Oracle Cloud | `oracle` | docs.oracle.com (выбор регионов) |
+
+GitHub поддерживает выбор сервисов через `/`: `github/copilot`, `github/actions`, `github/web` и др.
+Oracle поддерживает выбор регионов через `/`: `oracle/eu-frankfurt-1`, `oracle/us-ashburn-1` и др.
+
+```bash
+# интерактивный TUI-выбор
+./mikrotik-lists-manager fetch -o ranges.lst
+
+# все провайдеры сразу
+./mikrotik-lists-manager fetch -a -o ranges.lst
+
+# конкретные провайдеры
+./mikrotik-lists-manager fetch -p cloudflare,telegram -o ranges.lst
+
+# GitHub — только Copilot и Web
+./mikrotik-lists-manager fetch -p github/copilot,github/web -o ranges.lst
+
+# Oracle — конкретные регионы
+./mikrotik-lists-manager fetch -p oracle/eu-frankfurt-1,oracle/us-ashburn-1 -o ranges.lst
+
+# смешанно
+./mikrotik-lists-manager fetch -p cloudflare,telegram,github/copilot -o ranges.lst
+```
+
+Если провайдер недоступен — выводится предупреждение, остальные продолжают скачиваться.
 
 ---
 
@@ -384,6 +446,7 @@ default_format: auto
 ./mikrotik-lists-manager remove telegram.list -n
 ./mikrotik-lists-manager export -o backup.list
 ./mikrotik-lists-manager disable -a
+./mikrotik-lists-manager fetch -o ranges.lst
 ```
 
 ---

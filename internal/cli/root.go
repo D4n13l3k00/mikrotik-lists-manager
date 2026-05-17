@@ -160,6 +160,7 @@ func init() {
 	rootCmd.AddCommand(enableCmd)
 	rootCmd.AddCommand(disableCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(fetchCmd)
 
 	rootCmd.CompletionOptions.HiddenDefaultCmd = true
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -44,17 +45,28 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("оптимизация: %w", err)
 	}
 
-	if len(result.Removed) == 0 {
+	optimized := optimizer.Render(result.Lines)
+	unchanged := len(result.Removed) == 0 && optimized == string(content)
+
+	if unchanged {
 		output.Info("Список уже оптимален, изменений нет.")
 		return nil
 	}
 
-	output.Header(fmt.Sprintf("Удалено %d записей", len(result.Removed)))
-	for _, r := range result.Removed {
-		output.Remove(r.Address, r.Reason)
+	if len(result.Removed) > 0 {
+		output.Header(fmt.Sprintf("Удалено %d записей", len(result.Removed)))
+		for _, r := range result.Removed {
+			output.Remove(r.Address, r.Reason)
+		}
 	}
 
-	optimized := optimizer.Render(result.Lines)
+	if len(result.Normalized) > 0 {
+		output.Header(fmt.Sprintf("Нормализовано %d записей (/32 → IP)", len(result.Normalized)))
+		for _, addr := range result.Normalized {
+			bare := addr[:strings.LastIndex(addr, "/")]
+			output.Normalize(addr, bare)
+		}
+	}
 
 	if optimizeWrite {
 		if err := os.WriteFile(filePath, []byte(optimized), 0o644); err != nil {

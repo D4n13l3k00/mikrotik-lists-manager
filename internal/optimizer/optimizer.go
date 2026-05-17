@@ -23,8 +23,9 @@ type Line struct {
 
 // Result holds the optimized entries and a log of what was removed.
 type Result struct {
-	Lines   []Line
-	Removed []RemovedEntry
+	Lines      []Line
+	Removed    []RemovedEntry
+	Normalized []string // addresses converted from /32 to bare IP
 }
 
 type RemovedEntry struct {
@@ -41,10 +42,11 @@ func Optimize(content string) (Result, error) {
 	}
 
 	lines, removed := dedupe(lines)
+	lines, normalized := normalizeHostRoutes(lines)
 	lines, summarized := summarize(lines)
 	removed = append(removed, summarized...)
 
-	return Result{Lines: lines, Removed: removed}, nil
+	return Result{Lines: lines, Removed: removed, Normalized: normalized}, nil
 }
 
 // Render serializes optimized lines back to a .list string.
@@ -150,6 +152,23 @@ func parseDataLine(line string) (address, mtComment, humanNote string) {
 	}
 	address = line
 	return
+}
+
+// normalizeHostRoutes converts "x.x.x.x/32" to "x.x.x.x" in-place.
+// Returns the modified slice and a list of addresses that were changed.
+func normalizeHostRoutes(lines []Line) ([]Line, []string) {
+	var normalized []string
+	for i, l := range lines {
+		if l.IsComment || !l.IsIP || l.Network == nil {
+			continue
+		}
+		ones, bits := l.Network.Mask.Size()
+		if ones == 32 && bits == 32 && strings.Contains(l.Address, "/") {
+			normalized = append(normalized, l.Address)
+			lines[i].Address = l.Network.IP.String()
+		}
+	}
+	return lines, normalized
 }
 
 // dedupe removes exact duplicate addresses (case-insensitive for domains).

@@ -124,6 +124,7 @@ func (c *Client) GetList(listName string) ([]AddressListEntry, error) {
 }
 
 // AddEntry adds a new entry to the address list.
+// If the entry already exists on the router, the error is silently ignored.
 func (c *Client) AddEntry(listName, address, comment string, disabled bool) error {
 	payload := map[string]any{"list": listName, "address": address}
 	if comment != "" {
@@ -138,7 +139,14 @@ func (c *Client) AddEntry(listName, address, comment string, disabled bool) erro
 		return fmt.Errorf("add %s: %w", address, err)
 	}
 	defer resp.Body.Close()
-	return checkStatus(resp)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusBadRequest && strings.Contains(string(body), "already have such entry") {
+		return nil
+	}
+	return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 }
 
 // UpdateEntry updates comment and disabled state of an existing entry by its MikroTik ID.

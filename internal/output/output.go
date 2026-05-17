@@ -86,6 +86,17 @@ func Add(address, comment string, disabled bool) {
 	fmt.Println(line)
 }
 
+// Normalize prints a "/32 → bare IP" conversion line.
+func Normalize(from, to string) {
+	icon := styleUpd.Render("~")
+	line := fmt.Sprintf("  %s  %s%s",
+		icon,
+		styleOld.Render(from),
+		styleArrow.Render(" → ")+styleNew.Render(to),
+	)
+	fmt.Println(line)
+}
+
 func Remove(address, comment string) {
 	icon := styleDel.Render("−")
 	addr := styleAddr.Render(address)
