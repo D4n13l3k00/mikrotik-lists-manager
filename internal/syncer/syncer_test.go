@@ -30,7 +30,7 @@ func current(id, addr, comment string, disabled bool) mikrotik.AddressListEntry 
 
 func TestDiffAdd(t *testing.T) {
 	desired := []parser.Entry{entry("8.8.8.8", "DNS")}
-	changes := syncer.Diff(desired, nil)
+	changes, _ := syncer.Diff(desired, nil)
 
 	if len(changes) != 1 {
 		t.Fatalf("expected 1 change, got %d", len(changes))
@@ -45,7 +45,7 @@ func TestDiffAdd(t *testing.T) {
 
 func TestDiffDelete(t *testing.T) {
 	cur := []mikrotik.AddressListEntry{current("*1", "8.8.8.8", "", false)}
-	changes := syncer.Diff(nil, cur)
+	changes, _ := syncer.Diff(nil, cur)
 
 	if len(changes) != 1 {
 		t.Fatalf("expected 1 change, got %d", len(changes))
@@ -61,7 +61,7 @@ func TestDiffDelete(t *testing.T) {
 func TestDiffUpdateComment(t *testing.T) {
 	desired := []parser.Entry{entry("8.8.8.8", "NEW")}
 	cur := []mikrotik.AddressListEntry{current("*1", "8.8.8.8", "OLD", false)}
-	changes := syncer.Diff(desired, cur)
+	changes, _ := syncer.Diff(desired, cur)
 
 	if len(changes) != 1 {
 		t.Fatalf("expected 1 change, got %d", len(changes))
@@ -78,7 +78,7 @@ func TestDiffUpdateComment(t *testing.T) {
 func TestDiffUpdateDisabled(t *testing.T) {
 	desired := []parser.Entry{entryDisabled("1.1.1.1")}
 	cur := []mikrotik.AddressListEntry{current("*2", "1.1.1.1", "", false)}
-	changes := syncer.Diff(desired, cur)
+	changes, _ := syncer.Diff(desired, cur)
 
 	if len(changes) != 1 {
 		t.Fatalf("expected 1 change, got %d", len(changes))
@@ -95,7 +95,7 @@ func TestDiffUpdateDisabled(t *testing.T) {
 func TestDiffNoChange(t *testing.T) {
 	desired := []parser.Entry{entry("8.8.8.8", "DNS")}
 	cur := []mikrotik.AddressListEntry{current("*1", "8.8.8.8", "DNS", false)}
-	changes := syncer.Diff(desired, cur)
+	changes, _ := syncer.Diff(desired, cur)
 
 	if len(changes) != 0 {
 		t.Errorf("expected no changes, got %d: %+v", len(changes), changes)
@@ -113,7 +113,7 @@ func TestDiffMixed(t *testing.T) {
 		current("*2", "9.9.9.9", "OLD", false),
 		current("*3", "2.2.2.2", "", false), // to delete
 	}
-	changes := syncer.Diff(desired, cur)
+	changes, _ := syncer.Diff(desired, cur)
 
 	counts := map[syncer.Action]int{}
 	for _, ch := range changes {
@@ -127,6 +127,14 @@ func TestDiffMixed(t *testing.T) {
 	}
 	if counts[syncer.ActionUpdate] != 1 {
 		t.Errorf("expected 1 update, got %d", counts[syncer.ActionUpdate])
+	}
+}
+
+func TestDiffDuplicates(t *testing.T) {
+	desired := []parser.Entry{entry("8.8.8.8", "first"), entry("8.8.8.8", "second")}
+	_, dups := syncer.Diff(desired, nil)
+	if len(dups) != 1 || dups[0] != "8.8.8.8" {
+		t.Errorf("expected one duplicate 8.8.8.8, got %v", dups)
 	}
 }
 
