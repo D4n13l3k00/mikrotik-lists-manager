@@ -64,16 +64,43 @@ func NewClient(host, user, pass string, skipTLSVerify bool) *Client {
 }
 
 func (c *Client) do(method, path string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequest(method, c.baseURL+path, body)
-	if err != nil {
-		return nil, err
-	}
-	req.SetBasicAuth(c.user, c.pass)
+	var bodyBytes []byte
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return nil, err
+		}
 	}
-	req.Header.Set("Accept", "application/json")
-	return c.httpClient.Do(req)
+
+	var (
+		resp *http.Response
+		err  error
+	)
+	for attempt := range 3 {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+		var reqBody io.Reader
+		if bodyBytes != nil {
+			reqBody = strings.NewReader(string(bodyBytes))
+		}
+		var req *http.Request
+		req, err = http.NewRequest(method, c.baseURL+path, reqBody)
+		if err != nil {
+			return nil, err
+		}
+		req.SetBasicAuth(c.user, c.pass)
+		if reqBody != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err = c.httpClient.Do(req)
+		if err == nil {
+			break
+		}
+	}
+	return resp, err
 }
 
 func checkStatus(resp *http.Response) error {
