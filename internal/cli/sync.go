@@ -95,7 +95,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 			output.Info(fmt.Sprintf("На роутере: %d записей, в файле: %d записей", len(current), len(entries)))
 
-			changes := syncer.Diff(entries, current)
+			changes, duplicates := syncer.Diff(entries, current)
+			for _, addr := range duplicates {
+				output.Warn(fmt.Sprintf("дубль в файле: %s (используется последнее вхождение)", addr))
+			}
 			if len(changes) == 0 {
 				output.Info("Уже синхронизировано.")
 				return nil
