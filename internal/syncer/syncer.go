@@ -41,13 +41,18 @@ type APIClient interface {
 }
 
 // Diff computes what needs to change to make MikroTik match desired.
-func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) []Change {
+// Returns changes and a list of duplicate addresses found in desired.
+func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) ([]Change, []string) {
 	currentMap := make(map[string]mikrotik.AddressListEntry, len(current))
 	for _, e := range current {
 		currentMap[e.Address] = e
 	}
 	desiredMap := make(map[string]parser.Entry, len(desired))
+	var duplicates []string
 	for _, e := range desired {
+		if _, exists := desiredMap[e.Address]; exists {
+			duplicates = append(duplicates, e.Address)
+		}
 		desiredMap[e.Address] = e
 	}
 
@@ -86,7 +91,7 @@ func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) []Change 
 		}
 	}
 
-	return changes
+	return changes, duplicates
 }
 
 // Apply executes the changes against MikroTik. If dryRun is true, only prints.

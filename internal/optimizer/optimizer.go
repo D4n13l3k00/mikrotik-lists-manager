@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/parser"
 )
 
 // Line represents one parsed line from a native .list file, preserving
@@ -94,7 +96,7 @@ func parseLines(content string) ([]Line, error) {
 			continue
 		}
 
-		addr, mtComment, humanNote := parseDataLine(trimmed)
+		addr, mtComment, humanNote := parser.ParseDataLine(trimmed)
 		if addr == "" {
 			lines = append(lines, Line{Raw: raw, IsComment: true})
 			continue
@@ -131,27 +133,6 @@ func parseLines(content string) ([]Line, error) {
 		lines = append(lines, l)
 	}
 	return lines, scanner.Err()
-}
-
-func parseDataLine(line string) (address, mtComment, humanNote string) {
-	if idx := strings.Index(line, "##"); idx != -1 {
-		address = strings.TrimSpace(line[:idx])
-		rest := strings.TrimSpace(line[idx+2:])
-		if hi := strings.Index(rest, "#"); hi != -1 {
-			mtComment = strings.TrimSpace(rest[:hi])
-			humanNote = strings.TrimSpace(rest[hi+1:])
-		} else {
-			mtComment = rest
-		}
-		return
-	}
-	if idx := strings.Index(line, "#"); idx != -1 {
-		address = strings.TrimSpace(line[:idx])
-		humanNote = strings.TrimSpace(line[idx+1:])
-		return
-	}
-	address = line
-	return
 }
 
 // normalizeHostRoutes converts "x.x.x.x/32" to "x.x.x.x" in-place.

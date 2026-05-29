@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/spf13/cobra"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
@@ -81,29 +83,34 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(syncFlags.skipTLSVerify))
 
+	g := new(errgroup.Group)
 	for _, listName := range listNames {
-		output.Header(fmt.Sprintf("Синхронизация %q на %s", listName, host))
+		listName := listName
+		g.Go(func() error {
+			output.Header(fmt.Sprintf("Синхронизация %q на %s", listName, host))
 
-		current, err := client.GetList(listName)
-		if err != nil {
-			return fmt.Errorf("получение списка %q: %w", listName, err)
-		}
-		output.Info(fmt.Sprintf("На роутере: %d записей, в файле: %d записей", len(current), len(entries)))
+			current, err := client.GetList(listName)
+			if err != nil {
+				return fmt.Errorf("получение списка %q: %w", listName, err)
+			}
+			output.Info(fmt.Sprintf("На роутере: %d записей, в файле: %d записей", len(current), len(entries)))
 
-		changes := syncer.Diff(entries, current)
-		if len(changes) == 0 {
-			output.Info("Уже синхронизировано.")
-			continue
-		}
+			changes, duplicates := syncer.Diff(entries, current)
+			for _, addr := range duplicates {
+				output.Warn(fmt.Sprintf("дубль в файле: %s (используется последнее вхождение)", addr))
+			}
+			if len(changes) == 0 {
+				output.Info("Уже синхронизировано.")
+				return nil
+			}
 
-		output.Header("Изменения")
-		if syncDryRun {
-			output.Info("(dry run — изменения не будут применены)")
-		}
+			output.Header("Изменения")
+			if syncDryRun {
+				output.Info("(dry run — изменения не будут применены)")
+			}
 
-		if err := syncer.Apply(client, listName, changes, syncDryRun, syncVerbose); err != nil {
-			return err
-		}
+			return syncer.Apply(client, listName, changes, syncDryRun, syncVerbose)
+		})
 	}
-	return nil
+	return g.Wait()
 }

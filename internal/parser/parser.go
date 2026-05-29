@@ -56,7 +56,7 @@ func ParseNative(r io.Reader) ([]Entry, error) {
 			trimmed = strings.TrimSpace(trimmed[1:])
 		}
 
-		address, mtComment, humanNote := parseDataLine(trimmed)
+		address, mtComment, humanNote := ParseDataLine(trimmed)
 		if address == "" {
 			continue
 		}
@@ -81,8 +81,8 @@ func ParseNative(r io.Reader) ([]Entry, error) {
 	return entries, nil
 }
 
-// parseDataLine splits "address [## mtcomment] [# humannote]" into parts.
-func parseDataLine(line string) (address, mtComment, humanNote string) {
+// ParseDataLine splits "address [## mtcomment] [# humannote]" into parts.
+func ParseDataLine(line string) (address, mtComment, humanNote string) {
 	if idx := strings.Index(line, "##"); idx != -1 {
 		address = strings.TrimSpace(line[:idx])
 		rest := strings.TrimSpace(line[idx+2:])
