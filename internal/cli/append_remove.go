@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -252,7 +253,7 @@ func readFileOrStdin(path string) ([]byte, error) {
 }
 
 func readStdin() ([]byte, error) {
-	return os.ReadFile("/dev/stdin")
+	return io.ReadAll(os.Stdin)
 }
 
 func parseContent(content []byte, format string) ([]parser.Entry, error) {
