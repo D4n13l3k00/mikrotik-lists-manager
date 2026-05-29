@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 )
 
 var oracleProvider = Provider{
@@ -35,7 +36,17 @@ type oracleIPRanges struct {
 	} `json:"regions"`
 }
 
-func loadOracleRegions(client *http.Client) ([]Provider, error) {
+var (
+	oracleCacheMu   sync.Mutex
+	oracleCacheData *oracleIPRanges
+)
+
+func fetchOracleData(client *http.Client) (*oracleIPRanges, error) {
+	oracleCacheMu.Lock()
+	defer oracleCacheMu.Unlock()
+	if oracleCacheData != nil {
+		return oracleCacheData, nil
+	}
 	body, err := get(client, "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json")
 	if err != nil {
 		return nil, err
@@ -43,6 +54,15 @@ func loadOracleRegions(client *http.Client) ([]Provider, error) {
 	var data oracleIPRanges
 	if err := json.Unmarshal(body, &data); err != nil {
 		return nil, fmt.Errorf("parse JSON: %w", err)
+	}
+	oracleCacheData = &data
+	return oracleCacheData, nil
+}
+
+func loadOracleRegions(client *http.Client) ([]Provider, error) {
+	data, err := fetchOracleData(client)
+	if err != nil {
+		return nil, err
 	}
 	providers := make([]Provider, 0, len(data.Regions))
 	for _, r := range data.Regions {
@@ -58,13 +78,9 @@ func loadOracleRegions(client *http.Client) ([]Provider, error) {
 
 func makeOracleFetch(region string) func(*http.Client) ([]string, error) {
 	return func(client *http.Client) ([]string, error) {
-		body, err := get(client, "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json")
+		data, err := fetchOracleData(client)
 		if err != nil {
 			return nil, err
-		}
-		var data oracleIPRanges
-		if err := json.Unmarshal(body, &data); err != nil {
-			return nil, fmt.Errorf("parse JSON: %w", err)
 		}
 		var cidrs []string
 		for _, r := range data.Regions {
