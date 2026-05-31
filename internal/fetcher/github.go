@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 )
 
 var githubProvider = Provider{
@@ -27,6 +28,32 @@ var githubProvider = Provider{
 
 // GitHubProvider returns the GitHub provider entry.
 func GitHubProvider() Provider { return githubProvider }
+
+var (
+	githubMetaMu    sync.Mutex
+	githubMetaCache *githubMeta
+)
+
+// fetchGitHubMeta fetches https://api.github.com/meta once per process and
+// caches the result so selecting multiple GitHub services only calls the API
+// a single time.
+func fetchGitHubMeta(client *http.Client) (*githubMeta, error) {
+	githubMetaMu.Lock()
+	defer githubMetaMu.Unlock()
+	if githubMetaCache != nil {
+		return githubMetaCache, nil
+	}
+	body, err := get(client, "https://api.github.com/meta")
+	if err != nil {
+		return nil, err
+	}
+	var meta githubMeta
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return nil, fmt.Errorf("parse JSON: %w", err)
+	}
+	githubMetaCache = &meta
+	return &meta, nil
+}
 
 type githubMeta struct {
 	Hooks                    []string `json:"hooks"`
@@ -63,13 +90,9 @@ func (g *githubMeta) service(slug string) []string {
 
 func makeGitHubFetch(service string) func(*http.Client) ([]string, error) {
 	return func(client *http.Client) ([]string, error) {
-		body, err := get(client, "https://api.github.com/meta")
+		meta, err := fetchGitHubMeta(client)
 		if err != nil {
 			return nil, err
-		}
-		var meta githubMeta
-		if err := json.Unmarshal(body, &meta); err != nil {
-			return nil, fmt.Errorf("parse JSON: %w", err)
 		}
 		var cidrs []string
 		for _, addr := range meta.service(service) {
