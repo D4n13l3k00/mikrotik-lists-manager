@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 type ripeStatResponse struct {
@@ -12,6 +13,21 @@ type ripeStatResponse struct {
 			Prefix string `json:"prefix"`
 		} `json:"prefixes"`
 	} `json:"data"`
+}
+
+// MakeASNProvider creates an ad-hoc Provider for a single ASN via RIPE STAT.
+// Accepts "AS12345" or bare "12345" — normalizes to uppercase "AS…" form.
+func MakeASNProvider(asn string) Provider {
+	asn = strings.ToUpper(strings.TrimSpace(asn))
+	if !strings.HasPrefix(asn, "AS") {
+		asn = "AS" + asn
+	}
+	a := asn
+	return Provider{
+		Name:  a,
+		Slug:  strings.ToLower(a),
+		Fetch: func(c *http.Client) ([]string, error) { return fetchRIPEPrefixes(c, a) },
+	}
 }
 
 // fetchRIPEPrefixes queries RIPE STAT announced-prefixes for the given ASNs

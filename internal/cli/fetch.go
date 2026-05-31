@@ -16,6 +16,7 @@ import (
 )
 
 var fetchProviders []string
+var fetchASNs []string
 var fetchOutput string
 var fetchTimeout int
 var fetchAll bool
@@ -63,6 +64,8 @@ Tor — список IPv4-адресов выходных узлов с check.to
 func init() {
 	fetchCmd.Flags().StringArrayVarP(&fetchProviders, "provider", "p", nil,
 		"Провайдеры: -p cloudflare,google или -p cloudflare -p google")
+	fetchCmd.Flags().StringArrayVarP(&fetchASNs, "asn", "A", nil,
+		"ASN напрямую через RIPE STAT: -A AS12345 или -A 12345,67890")
 	fetchCmd.Flags().BoolVarP(&fetchAll, "all", "a", false, "Скачать все провайдеры без интерактивного выбора")
 	fetchCmd.Flags().StringVarP(&fetchOutput, "output", "o", "", "Путь к выходному файлу (обязательный)")
 	fetchCmd.Flags().IntVarP(&fetchTimeout, "timeout", "t", 30, "Таймаут HTTP-запроса в секундах")
@@ -72,10 +75,19 @@ func init() {
 func runFetch(cmd *cobra.Command, args []string) error {
 	client := fetcher.NewClient(time.Duration(fetchTimeout) * time.Second)
 
-	providers, err := resolveFetchProviders(fetchProviders, fetchAll, client)
-	if err != nil {
-		return err
+	asnProviders := parseASNProviders(fetchASNs)
+
+	// Skip TUI when only --asn is given (no --provider, no --all)
+	var providers []fetcher.Provider
+	if len(fetchProviders) > 0 || fetchAll || len(asnProviders) == 0 {
+		var err error
+		providers, err = resolveFetchProviders(fetchProviders, fetchAll, client)
+		if err != nil {
+			return err
+		}
 	}
+	providers = append(providers, asnProviders...)
+
 	if len(providers) == 0 {
 		return nil
 	}
@@ -329,6 +341,20 @@ func sectionHeader(name string) string {
 		dashes = 2
 	}
 	return prefix + strings.Repeat("─", dashes)
+}
+
+// parseASNProviders splits comma-separated ASN values and returns one Provider per ASN.
+func parseASNProviders(flagVals []string) []fetcher.Provider {
+	var providers []fetcher.Provider
+	for _, v := range flagVals {
+		for _, part := range strings.Split(v, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				providers = append(providers, fetcher.MakeASNProvider(part))
+			}
+		}
+	}
+	return providers
 }
 
 // tuiHeight returns a comfortable list height based on terminal rows.
