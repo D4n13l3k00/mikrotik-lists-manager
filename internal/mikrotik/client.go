@@ -260,6 +260,30 @@ type routerBoard struct {
 	UpgradeFirmware string `json:"upgrade-firmware"`
 }
 
+// RenameList renames an address-list by patching the list field of every entry.
+// Returns the number of entries updated.
+func (c *Client) RenameList(ctx context.Context, oldName, newName string) (int, error) {
+	entries, err := c.GetList(ctx, oldName)
+	if err != nil {
+		return 0, err
+	}
+	if len(entries) == 0 {
+		return 0, fmt.Errorf("список %q не найден или пуст", oldName)
+	}
+	for _, e := range entries {
+		b, _ := json.Marshal(map[string]any{"list": newName})
+		resp, err := c.do(ctx, "PATCH", "/rest/ip/firewall/address-list/"+e.ID, strings.NewReader(string(b)))
+		if err != nil {
+			return 0, fmt.Errorf("rename %s: %w", e.Address, err)
+		}
+		resp.Body.Close()
+		if err := checkStatus(resp); err != nil {
+			return 0, err
+		}
+	}
+	return len(entries), nil
+}
+
 // GetRouterInfo fetches system resource and routerboard info concurrently.
 // RouterBoard endpoint failure is non-fatal (CHR/x86 devices have no routerboard).
 func (c *Client) GetRouterInfo(ctx context.Context) (*RouterInfo, error) {

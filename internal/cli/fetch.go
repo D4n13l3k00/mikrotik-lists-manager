@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/term"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/fetcher"
@@ -20,6 +22,8 @@ var fetchASNs []string
 var fetchOutput string
 var fetchTimeout int
 var fetchAll bool
+var fetchOutFormat string
+var fetchMerge bool
 
 var (
 	fetchStylePending = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
@@ -69,6 +73,8 @@ func init() {
 	fetchCmd.Flags().BoolVarP(&fetchAll, "all", "a", false, "Скачать все провайдеры без интерактивного выбора")
 	fetchCmd.Flags().StringVarP(&fetchOutput, "output", "o", "", "Путь к выходному файлу (обязательный)")
 	fetchCmd.Flags().IntVarP(&fetchTimeout, "timeout", "t", 30, "Таймаут HTTP-запроса в секундах")
+	fetchCmd.Flags().StringVarP(&fetchOutFormat, "format", "f", "native", "Формат вывода: native или mikrotik (.rsc)")
+	fetchCmd.Flags().BoolVarP(&fetchMerge, "merge", "m", false, "Добавить результаты в существующий файл (только для native)")
 	_ = fetchCmd.MarkFlagRequired("output")
 }
 
@@ -97,26 +103,37 @@ func runFetch(cmd *cobra.Command, args []string) error {
 		cidrs    []string
 		err      error
 	}
+	results := make([]result, len(providers))
+
+	fmt.Printf("\n  %s\n\n", fetchStylePending.Render(fmt.Sprintf("Загрузка %d провайдеров...", len(providers))))
+
+	var mu sync.Mutex
+	g, _ := errgroup.WithContext(cmd.Context())
+	for i, p := range providers {
+		g.Go(func() error {
+			cidrs, fetchErr := p.Fetch(client)
+			mu.Lock()
+			results[i] = result{provider: p, cidrs: cidrs, err: fetchErr}
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
 
 	fmt.Println()
-	results := make([]result, 0, len(providers))
-	for _, p := range providers {
-		fmt.Printf("  %s  %s\n",
-			fetchStyleName.Render(fmt.Sprintf("%-32s", p.Name)),
-			fetchStylePending.Render("загрузка..."),
-		)
-		cidrs, fetchErr := p.Fetch(client)
-		fmt.Print("\033[1A\033[2K")
-		if fetchErr != nil {
-			output.Warn(fmt.Sprintf("%-32s %v", p.Name, fetchErr))
+	for _, r := range results {
+		if r.err != nil {
+			output.Warn(fmt.Sprintf("%-32s %v", r.provider.Name, r.err))
 		} else {
 			fmt.Printf("  %s  %s\n",
-				fetchStyleName.Render(fmt.Sprintf("%-32s", p.Name)),
-				fetchStyleOK.Render(fmt.Sprintf("%d CIDR", len(cidrs))),
+				fetchStyleName.Render(fmt.Sprintf("%-32s", r.provider.Name)),
+				fetchStyleOK.Render(fmt.Sprintf("%d CIDR", len(r.cidrs))),
 			)
 		}
-		results = append(results, result{provider: p, cidrs: cidrs, err: fetchErr})
 	}
+	fmt.Println()
 
 	var sb strings.Builder
 	total := 0
@@ -124,13 +141,22 @@ func runFetch(cmd *cobra.Command, args []string) error {
 		if r.err != nil || len(r.cidrs) == 0 {
 			continue
 		}
-		sb.WriteString(sectionHeader(r.provider.Name))
-		sb.WriteByte('\n')
 		tag := strings.ToUpper(r.provider.Name)
-		for _, cidr := range r.cidrs {
-			sb.WriteString(fmt.Sprintf("%-24s ## %s\n", cidr, tag))
+		if fetchOutFormat == "mikrotik" {
+			if sb.Len() == 0 {
+				sb.WriteString("/ip firewall address-list\n")
+			}
+			for _, cidr := range r.cidrs {
+				sb.WriteString(fmt.Sprintf("add list=%s address=%s comment=%q\n", r.provider.Slug, cidr, tag))
+			}
+		} else {
+			sb.WriteString(sectionHeader(r.provider.Name))
+			sb.WriteByte('\n')
+			for _, cidr := range r.cidrs {
+				sb.WriteString(fmt.Sprintf("%-24s ## %s\n", cidr, tag))
+			}
+			sb.WriteByte('\n')
 		}
-		sb.WriteByte('\n')
 		total += len(r.cidrs)
 	}
 
@@ -138,13 +164,86 @@ func runFetch(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("не удалось получить ни одного CIDR — файл не записан")
 	}
 
-	if err := os.WriteFile(fetchOutput, []byte(sb.String()), 0o644); err != nil {
+	fileContent := sb.String()
+	if fetchMerge && fetchOutFormat != "mikrotik" {
+		merged, err := mergeFetchContent(fetchOutput, fileContent)
+		if err != nil {
+			return err
+		}
+		fileContent = merged
+	}
+
+	if err := os.WriteFile(fetchOutput, []byte(fileContent), 0o644); err != nil {
 		return fmt.Errorf("запись файла: %w", err)
 	}
 
 	output.Summary(total, 0, 0, false)
 	fmt.Printf("\n  %s\n\n", fetchStylePending.Render("→ "+fetchOutput))
 	return nil
+}
+
+// mergeFetchContent merges new section content into an existing file.
+// Sections identified by "# ── Name ─..." headers are replaced; unknown sections are kept.
+func mergeFetchContent(filePath, newContent string) (string, error) {
+	existing, err := os.ReadFile(filePath)
+	if os.IsNotExist(err) {
+		return newContent, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("чтение файла для merge: %w", err)
+	}
+
+	existOrder, existSections := parseFetchSections(string(existing))
+	_, newSections := parseFetchSections(newContent)
+
+	for name, content := range newSections {
+		if _, exists := existSections[name]; !exists {
+			existOrder = append(existOrder, name)
+		}
+		existSections[name] = content
+	}
+
+	var sb strings.Builder
+	for _, name := range existOrder {
+		sb.WriteString(existSections[name])
+	}
+	return sb.String(), nil
+}
+
+// parseFetchSections splits a native fetch file into ordered named sections.
+// Section headers match the pattern "# ── Name ─...".
+func parseFetchSections(content string) ([]string, map[string]string) {
+	var order []string
+	sections := make(map[string]string)
+	current := ""
+	var buf strings.Builder
+
+	save := func() {
+		if current == "" && buf.Len() == 0 {
+			return
+		}
+		key := current
+		if key == "" {
+			key = "\x00"
+		}
+		if _, exists := sections[key]; !exists {
+			order = append(order, key)
+		}
+		sections[key] += buf.String()
+		buf.Reset()
+	}
+
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "# ── ") {
+			save()
+			trimmed := strings.TrimPrefix(line, "# ── ")
+			current = strings.TrimRight(trimmed, "─ \t")
+		}
+		buf.WriteString(line + "\n")
+	}
+	save()
+
+	return order, sections
 }
 
 // resolveFetchProviders returns the flat list of leaf providers to fetch.

@@ -168,6 +168,10 @@ func init() {
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(fetchCmd)
 	rootCmd.AddCommand(infoCmd)
+	rootCmd.AddCommand(findCmd)
+	rootCmd.AddCommand(backupCmd)
+	rootCmd.AddCommand(renameCmd)
+	rootCmd.AddCommand(completionCmd)
 
 	rootCmd.CompletionOptions.HiddenDefaultCmd = true
 

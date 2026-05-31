@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -13,6 +14,8 @@ import (
 
 var listFlags connFlags
 var listEntries string
+var listSort string
+var listFilter string
 
 var listCmd = &cobra.Command{
 	Use:   "list",
@@ -32,6 +35,8 @@ func init() {
 	listCmd.Flags().StringVarP(&listFlags.pass, "pass", "p", "", "Пароль API [$MT_PASS]")
 	listCmd.Flags().BoolVarP(&listFlags.skipTLSVerify, "insecure", "k", false, "Не проверять TLS сертификат")
 	listCmd.Flags().StringVarP(&listEntries, "entries", "e", "", "Показать все записи указанного списка")
+	listCmd.Flags().StringVar(&listSort, "sort", "name", "Сортировка: name (по имени) или size (по количеству записей)")
+	listCmd.Flags().StringVarP(&listFilter, "filter", "F", "", "Фильтр по имени списка (подстрока, без учёта регистра)")
 }
 
 func runList(cmd *cobra.Command, args []string) error {
@@ -85,9 +90,19 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	names := make([]string, 0, len(stats))
 	for n := range stats {
-		names = append(names, n)
+		if listFilter == "" || strings.Contains(strings.ToLower(n), strings.ToLower(listFilter)) {
+			names = append(names, n)
+		}
 	}
-	sort.Strings(names)
+
+	switch listSort {
+	case "size":
+		sort.Slice(names, func(i, j int) bool {
+			return stats[names[i]].total > stats[names[j]].total
+		})
+	default:
+		sort.Strings(names)
+	}
 
 	output.Header(fmt.Sprintf("Address-lists на %s", host))
 	for _, name := range names {
