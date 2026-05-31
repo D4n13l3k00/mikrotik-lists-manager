@@ -382,6 +382,10 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | Steam / Valve | `steam` | RIPE STAT (AS32590) |
 | Blizzard | `blizzard` | RIPE STAT (AS57976, AS209242) |
 | Riot Games | `riot` | RIPE STAT (AS6507, AS26008) |
+| Ubisoft | `ubisoft` | RIPE STAT (AS39561) |
+| EA / Electronic Arts | `ea` | RIPE STAT (AS12128, AS14068) |
+| Epic Games | `epic` | RIPE STAT (AS46562) |
+| Roblox | `roblox` | RIPE STAT (AS22697) |
 | Apple | `apple` | RIPE STAT (AS714, AS6185) |
 | Yandex | `yandex` | RIPE STAT (AS13238) |
 | VK | `vk` | RIPE STAT (AS47541, AS44507) |
