@@ -32,11 +32,17 @@ var fetchCmd = &cobra.Command{
 	Long: `Загружает IPv4 CIDR-диапазоны из публичных источников и записывает их
 в native .lst файл с секциями по провайдерам.
 
-Доступные провайдеры: cloudflare, google, aws, azure, fastly, telegram, github, oracle
+Доступные провайдеры:
+  cloudflare, google, aws, azure, fastly
+  akamai, digitalocean, hetzner, ovh
+  telegram, tor
+  github, oracle
 
 GitHub — выбор сервисов: github/hooks, github/web, github/api, github/git,
   github/packages, github/pages, github/actions, github/copilot и др.
 Oracle — выбор регионов: oracle/us-ashburn-1, oracle/eu-frankfurt-1 и др.
+Akamai, DigitalOcean, Hetzner, OVHcloud — данные через RIPE STAT BGP API.
+Tor — список IPv4-адресов выходных узлов с check.torproject.org.
 
 Без флагов — интерактивный выбор провайдеров (TUI).
 С --all    — скачать все провайдеры без вопросов.
