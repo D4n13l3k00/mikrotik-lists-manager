@@ -19,6 +19,11 @@ CLI утилита для управления firewall address-list на MikroT
   - [enable / disable](#enable--disable--включение-и-отключение)
   - [optimize](#optimize--оптимизация-файла)
   - [fetch](#fetch--автозагрузка-cidr-диапазонов)
+  - [find](#find--поиск-адреса-на-роутере)
+  - [backup](#backup--резервное-копирование)
+  - [rename](#rename--переименование-списка)
+  - [info](#info--информация-о-роутере)
+  - [completion](#completion--автодополнение-оболочки)
   - [config](#config--управление-конфигом)
 - [Конфигурационный файл](#конфигурационный-файл)
 - [Переменные окружения](#переменные-окружения)
@@ -143,6 +148,9 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 | `--format` | `-f` | Формат файла: `auto`, `native`, `mikrotik` (по умолчанию `auto`) |
 | `--dry-run` | `-n` | Показать изменения без применения |
 | `--verbose` | `-v` | Выводить каждую запись даже при прогресс-баре |
+| `--concurrency` | `-c` | Число параллельных запросов к API (по умолчанию 5, 0 = последовательно) |
+| `--watch` | `-w` | Следить за файлом и пересинхронизировать при изменении |
+| `--watch-interval` | | Интервал проверки файла в секундах (по умолчанию 3, с `--watch`) |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
@@ -155,17 +163,11 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 # синхронизировать в несколько списков
 ./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn,blocked
 
-# роутер на HTTP
-./mikrotik-lists-manager sync vpn.list -H http://192.168.1.1 -u admin -l vpn-routes
-
-# нестандартный порт, самоподписанный сертификат
-./mikrotik-lists-manager sync vpn.list -H https://192.168.1.1:8443 -u admin -l vpn-routes -k
-
 # из stdin
 cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-routes
 
-# с подробным выводом при большом списке
-./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -v
+# следить за файлом и синхронизировать при каждом изменении
+./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -w
 ```
 
 ---
@@ -183,10 +185,23 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--host` | `-H` | Адрес роутера |
 | `--user` | `-u` | Имя пользователя API |
 | `--pass` | `-p` | Пароль |
+| `--entries` | `-e` | Показать все записи конкретного списка |
+| `--sort` | | Сортировка: `name` (по умолчанию) или `size` (по количеству записей) |
+| `--filter` | `-F` | Фильтр по имени списка (подстрока, без учёта регистра) |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
+# все списки
 ./mikrotik-lists-manager list -H 192.168.1.1 -u admin
+
+# по убыванию размера
+./mikrotik-lists-manager list -H 192.168.1.1 -u admin --sort size
+
+# только списки с "vpn" в имени
+./mikrotik-lists-manager list -H 192.168.1.1 -u admin -F vpn
+
+# все записи конкретного списка
+./mikrotik-lists-manager list -H 192.168.1.1 -u admin -e vpn-routes
 ```
 
 ---
@@ -342,7 +357,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 ### `fetch` — автозагрузка CIDR-диапазонов
 
-Скачивает актуальные IPv4 CIDR-диапазоны из публичных источников и сохраняет в native `.lst` файл с секциями по провайдерам.
+Скачивает актуальные IPv4 CIDR-диапазоны из публичных источников и сохраняет в native `.lst` файл с секциями по провайдерам. Провайдеры загружаются параллельно.
 
 Без флагов запускает интерактивный TUI для выбора провайдеров и сервисов.
 
@@ -356,6 +371,8 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--provider` | `-p` | Провайдеры: `-p cloudflare,google` или `-p cloudflare -p google` |
 | `--asn` | `-A` | Произвольный ASN через RIPE STAT: `-A AS12345` или `-A 12345,67890` |
 | `--all` | `-a` | Скачать все провайдеры без интерактивного выбора |
+| `--format` | `-f` | Формат вывода: `native` (по умолчанию) или `mikrotik` (RSC скрипт) |
+| `--merge` | `-m` | Обновить секции в существующем файле, не перезаписывая его целиком |
 | `--timeout` | `-t` | Таймаут HTTP-запроса в секундах (по умолчанию 30) |
 
 **Доступные провайдеры:**
@@ -426,9 +443,123 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 # ASN вместе с провайдерами
 ./mikrotik-lists-manager fetch -A AS203502 -p telegram -o combined.lst
+
+# вывод в формате MikroTik RSC скрипта
+./mikrotik-lists-manager fetch -p cloudflare,telegram -f mikrotik -o ranges.rsc
+
+# обновить только изменившиеся секции в существующем файле
+./mikrotik-lists-manager fetch -p cloudflare,telegram -m -o ranges.lst
 ```
 
 Если провайдер недоступен — выводится предупреждение, остальные продолжают скачиваться.
+
+---
+
+### `find` — поиск адреса на роутере
+
+Ищет IP или CIDR во всех address-list на роутере. Находит точные совпадения, а также проверяет попадание IP в CIDR-записи и наоборот.
+
+```shell
+./mikrotik-lists-manager find <address> [флаги]
+```
+
+| Флаг | Короткий | Описание |
+|------|----------|----------|
+| `--host` | `-H` | Адрес роутера |
+| `--user` | `-u` | Имя пользователя API |
+| `--pass` | `-p` | Пароль |
+| `--insecure` | `-k` | Не проверять TLS сертификат |
+
+```bash
+# найти конкретный IP (включая попадание в CIDR-записи)
+./mikrotik-lists-manager find 8.8.8.8 -H 192.168.1.1 -u admin
+
+# найти все записи, входящие в подсеть
+./mikrotik-lists-manager find 8.8.0.0/16 -H 192.168.1.1 -u admin
+```
+
+---
+
+### `backup` — резервное копирование
+
+Сохраняет все статические address-list с роутера в папку — один файл на список.
+
+```shell
+./mikrotik-lists-manager backup [флаги]
+```
+
+| Флаг | Короткий | Описание |
+|------|----------|----------|
+| `--host` | `-H` | Адрес роутера |
+| `--user` | `-u` | Имя пользователя API |
+| `--pass` | `-p` | Пароль |
+| `--output` | `-o` | Папка для сохранения файлов (по умолчанию `.`) |
+| `--format` | `-f` | Формат: `native` (по умолчанию) или `mikrotik` |
+| `--insecure` | `-k` | Не проверять TLS сертификат |
+
+```bash
+# сохранить все списки в папку ./backup
+./mikrotik-lists-manager backup -H 192.168.1.1 -u admin -o ./backup
+
+# в формате MikroTik RSC
+./mikrotik-lists-manager backup -H 192.168.1.1 -u admin -o ./backup -f mikrotik
+```
+
+---
+
+### `rename` — переименование списка
+
+Переименовывает address-list на роутере, обновляя поле `list` у всех его записей через REST API.
+
+```shell
+./mikrotik-lists-manager rename <old-name> <new-name> [флаги]
+```
+
+| Флаг | Короткий | Описание |
+|------|----------|----------|
+| `--host` | `-H` | Адрес роутера |
+| `--user` | `-u` | Имя пользователя API |
+| `--pass` | `-p` | Пароль |
+| `--insecure` | `-k` | Не проверять TLS сертификат |
+
+```bash
+./mikrotik-lists-manager rename vpn-old vpn-routes -H 192.168.1.1 -u admin
+```
+
+---
+
+### `info` — информация о роутере
+
+Подключается к роутеру и выводит информационный блок: модель, RouterOS, CPU, память, аптайм, прошивка RouterBoard.
+
+```shell
+./mikrotik-lists-manager info [флаги]
+```
+
+```bash
+./mikrotik-lists-manager info -H 192.168.1.1 -u admin
+```
+
+---
+
+### `completion` — автодополнение оболочки
+
+Генерирует скрипт автодополнения команд и флагов для популярных оболочек.
+
+```shell
+./mikrotik-lists-manager completion [bash|zsh|fish|powershell]
+```
+
+```bash
+# Bash
+./mikrotik-lists-manager completion bash > /etc/bash_completion.d/mikrotik-lists-manager
+
+# Zsh
+./mikrotik-lists-manager completion zsh > "${fpath[1]}/_mikrotik-lists-manager"
+
+# Fish
+./mikrotik-lists-manager completion fish > ~/.config/fish/completions/mikrotik-lists-manager.fish
+```
 
 ---
 
