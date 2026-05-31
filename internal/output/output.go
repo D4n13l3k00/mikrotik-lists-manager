@@ -328,6 +328,19 @@ func formatMemory(free, total string) string {
 	return fmt.Sprintf("%d MiB free / %d MiB", freeB/1024/1024, totalB/1024/1024)
 }
 
+// EntryRow prints one address-list entry for the `list --entries` command.
+func EntryRow(address, comment string, disabled bool) {
+	addr := addrStyle(disabled).Render(fmt.Sprintf("%-24s", address))
+	line := fmt.Sprintf("  %s", addr)
+	if comment != "" {
+		line += "  " + styleComment.Render("# "+comment)
+	}
+	if disabled {
+		line += "  " + styleDis.Render("[off]")
+	}
+	fmt.Println(line)
+}
+
 // ListRow prints one row of the `list` command output.
 func ListRow(name string, count int, disabled int) {
 	n := styleAddr.Render(fmt.Sprintf("%-32s", name))
