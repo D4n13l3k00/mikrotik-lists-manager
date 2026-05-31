@@ -134,6 +134,7 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 
 Если запись в файле без `!`, но на роутере она `disabled=true` — включит обратно.
 При 10+ изменениях показывает прогресс-бар. Флаг `-v` включает построчный вывод вместе с баром.
+API-запросы выполняются параллельно (флаг `-c`, по умолчанию 5). При подключении выводится баннер роутера.
 
 ```shell
 ./mikrotik-lists-manager sync [file] [флаги]
@@ -222,6 +223,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--list` | `-l` | Имя address-list, можно несколько |
 | `--format` | `-f` | Формат файла: `auto`, `native`, `mikrotik` |
 | `--dry-run` | `-n` | Показать изменения без применения |
+| `--concurrency` | `-c` | Число параллельных запросов к API (по умолчанию 5, 0 = последовательно) |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
@@ -250,6 +252,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--list` | `-l` | Имя address-list, можно несколько |
 | `--format` | `-f` | Формат файла: `auto`, `native`, `mikrotik` |
 | `--dry-run` | `-n` | Показать изменения без применения |
+| `--concurrency` | `-c` | Число параллельных запросов к API (по умолчанию 5, 0 = последовательно) |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
@@ -535,6 +538,13 @@ Oracle поддерживает выбор регионов через `/`: `ora
 ```shell
 ./mikrotik-lists-manager info [флаги]
 ```
+
+| Флаг | Короткий | Описание |
+|------|----------|----------|
+| `--host` | `-H` | Адрес роутера |
+| `--user` | `-u` | Имя пользователя API |
+| `--pass` | `-p` | Пароль |
+| `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
 ./mikrotik-lists-manager info -H 192.168.1.1 -u admin
