@@ -2,7 +2,9 @@ package syncer
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strings"
 
 	"github.com/schollz/progressbar/v3"
 
@@ -40,26 +42,52 @@ type APIClient interface {
 	DeleteEntry(id string) error
 }
 
+// normalizeAddr canonicalizes an IP/CIDR address for comparison.
+// Bare IPs are expanded to /32 (IPv4) or /128 (IPv6) so that "8.8.8.8" and
+// "8.8.8.8/32" resolve to the same key. Non-IP values (domains, MACs) are
+// returned unchanged.
+func normalizeAddr(s string) string {
+	if strings.Contains(s, "/") {
+		ip, ipnet, err := net.ParseCIDR(s)
+		if err != nil {
+			return s
+		}
+		ones, _ := ipnet.Mask.Size()
+		return fmt.Sprintf("%s/%d", ip.String(), ones)
+	}
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return s
+	}
+	if ip.To4() != nil {
+		return s + "/32"
+	}
+	return s + "/128"
+}
+
 // Diff computes what needs to change to make MikroTik match desired.
 // Returns changes and a list of duplicate addresses found in desired.
+// Addresses are normalized before comparison so that "8.8.8.8" and "8.8.8.8/32"
+// are treated as the same entry.
 func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) ([]Change, []string) {
 	currentMap := make(map[string]mikrotik.AddressListEntry, len(current))
 	for _, e := range current {
-		currentMap[e.Address] = e
+		currentMap[normalizeAddr(e.Address)] = e
 	}
 	desiredMap := make(map[string]parser.Entry, len(desired))
 	var duplicates []string
 	for _, e := range desired {
-		if _, exists := desiredMap[e.Address]; exists {
+		key := normalizeAddr(e.Address)
+		if _, exists := desiredMap[key]; exists {
 			duplicates = append(duplicates, e.Address)
 		}
-		desiredMap[e.Address] = e
+		desiredMap[key] = e
 	}
 
 	var changes []Change
 
 	for _, want := range desired {
-		if have, exists := currentMap[want.Address]; exists {
+		if have, exists := currentMap[normalizeAddr(want.Address)]; exists {
 			if have.Comment != want.Comment || have.Disabled.Bool() != want.Disabled {
 				changes = append(changes, Change{
 					Action:      ActionUpdate,
@@ -82,7 +110,7 @@ func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) ([]Change
 	}
 
 	for _, have := range current {
-		if _, wanted := desiredMap[have.Address]; !wanted {
+		if _, wanted := desiredMap[normalizeAddr(have.Address)]; !wanted {
 			changes = append(changes, Change{
 				Action:  ActionDelete,
 				Address: have.Address,

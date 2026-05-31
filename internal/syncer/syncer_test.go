@@ -138,6 +138,32 @@ func TestDiffDuplicates(t *testing.T) {
 	}
 }
 
+func TestDiffAddrNormalization(t *testing.T) {
+	// Router returns 8.8.8.8/32, file has bare 8.8.8.8 — must be treated as the same entry.
+	desired := []parser.Entry{entry("8.8.8.8", "DNS")}
+	cur := []mikrotik.AddressListEntry{current("*1", "8.8.8.8/32", "DNS", false)}
+	changes, _ := syncer.Diff(desired, cur)
+	if len(changes) != 0 {
+		t.Errorf("expected no changes after normalization, got %d: %+v", len(changes), changes)
+	}
+}
+
+func TestDiffAddrNormalizationUpdate(t *testing.T) {
+	// Same address mismatch but comment differs — must produce Update, not Add+Delete.
+	desired := []parser.Entry{entry("1.1.1.1", "NEW")}
+	cur := []mikrotik.AddressListEntry{current("*2", "1.1.1.1/32", "OLD", false)}
+	changes, _ := syncer.Diff(desired, cur)
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change, got %d: %+v", len(changes), changes)
+	}
+	if changes[0].Action != syncer.ActionUpdate {
+		t.Errorf("expected ActionUpdate, got %v", changes[0].Action)
+	}
+	if changes[0].ID != "*2" {
+		t.Errorf("expected ID *2, got %q", changes[0].ID)
+	}
+}
+
 // ── Apply tests ───────────────────────────────────────────────────────────────
 
 type mockClient struct {
