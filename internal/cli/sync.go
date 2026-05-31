@@ -83,13 +83,14 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(syncFlags.skipTLSVerify))
 
+	ctx := cmd.Context()
 	g := new(errgroup.Group)
 	for _, listName := range listNames {
 		listName := listName
 		g.Go(func() error {
 			output.Header(fmt.Sprintf("Синхронизация %q на %s", listName, host))
 
-			current, err := client.GetList(listName)
+			current, err := client.GetList(ctx, listName)
 			if err != nil {
 				return fmt.Errorf("получение списка %q: %w", listName, err)
 			}
@@ -109,7 +110,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 				output.Info("(dry run — изменения не будут применены)")
 			}
 
-			return syncer.Apply(client, listName, changes, syncDryRun, syncVerbose)
+			return syncer.Apply(ctx, client, listName, changes, syncDryRun, syncVerbose)
 		})
 	}
 	return g.Wait()

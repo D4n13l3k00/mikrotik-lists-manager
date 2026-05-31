@@ -74,9 +74,10 @@ func runAppend(cmd *cobra.Command, args []string) error {
 	}
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(appendFlags.skipTLSVerify))
+	ctx := cmd.Context()
 
 	for _, listName := range listNames {
-		current, err := client.GetList(listName)
+		current, err := client.GetList(ctx, listName)
 		if err != nil {
 			return fmt.Errorf("получение списка %q: %w", listName, err)
 		}
@@ -99,7 +100,7 @@ func runAppend(cmd *cobra.Command, args []string) error {
 			}
 			output.Add(e.Address, e.Comment, e.Disabled)
 			if !appendDryRun {
-				if err := client.AddEntry(listName, e.Address, e.Comment, e.Disabled); err != nil {
+				if err := client.AddEntry(ctx, listName, e.Address, e.Comment, e.Disabled); err != nil {
 					return fmt.Errorf("добавление %s: %w", e.Address, err)
 				}
 			}
@@ -189,9 +190,10 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(removeFlags.skipTLSVerify))
+	ctx := cmd.Context()
 
 	for _, listName := range listNames {
-		current, err := client.GetList(listName)
+		current, err := client.GetList(ctx, listName)
 		if err != nil {
 			return fmt.Errorf("получение списка %q: %w", listName, err)
 		}
@@ -214,7 +216,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 			}
 			output.Remove(e.Address, e.Comment)
 			if !removeDryRun {
-				if err := client.DeleteEntry(e.ID); err != nil {
+				if err := client.DeleteEntry(ctx, e.ID); err != nil {
 					return fmt.Errorf("удаление %s: %w", e.Address, err)
 				}
 			}

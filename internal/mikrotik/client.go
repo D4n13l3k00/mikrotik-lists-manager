@@ -1,6 +1,7 @@
 package mikrotik
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -63,7 +64,7 @@ func NewClient(host, user, pass string, skipTLSVerify bool) *Client {
 	}
 }
 
-func (c *Client) do(method, path string, body io.Reader) (*http.Response, error) {
+func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
 	var bodyBytes []byte
 	if body != nil {
 		var err error
@@ -86,7 +87,7 @@ func (c *Client) do(method, path string, body io.Reader) (*http.Response, error)
 			reqBody = strings.NewReader(string(bodyBytes))
 		}
 		var req *http.Request
-		req, err = http.NewRequest(method, c.baseURL+path, reqBody)
+		req, err = http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
 		if err != nil {
 			return nil, err
 		}
@@ -120,9 +121,9 @@ func checkStatus(resp *http.Response) error {
 }
 
 // GetAllEntries returns all static entries across all address-lists.
-func (c *Client) GetAllEntries() ([]AddressListEntry, error) {
+func (c *Client) GetAllEntries(ctx context.Context) ([]AddressListEntry, error) {
 	path := "/rest/ip/firewall/address-list?" + url.Values{"dynamic": {"false"}}.Encode()
-	resp, err := c.do("GET", path, nil)
+	resp, err := c.do(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("GET address-list: %w", err)
 	}
@@ -138,12 +139,12 @@ func (c *Client) GetAllEntries() ([]AddressListEntry, error) {
 }
 
 // GetList returns all static (dynamic=false) entries for the given address-list name.
-func (c *Client) GetList(listName string) ([]AddressListEntry, error) {
+func (c *Client) GetList(ctx context.Context, listName string) ([]AddressListEntry, error) {
 	path := "/rest/ip/firewall/address-list?" + url.Values{
 		"list":    {listName},
 		"dynamic": {"false"},
 	}.Encode()
-	resp, err := c.do("GET", path, nil)
+	resp, err := c.do(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("GET address-list: %w", err)
 	}
@@ -160,7 +161,7 @@ func (c *Client) GetList(listName string) ([]AddressListEntry, error) {
 
 // AddEntry adds a new entry to the address list.
 // If the entry already exists on the router, the error is silently ignored.
-func (c *Client) AddEntry(listName, address, comment string, disabled bool) error {
+func (c *Client) AddEntry(ctx context.Context, listName, address, comment string, disabled bool) error {
 	payload := map[string]any{"list": listName, "address": address}
 	if comment != "" {
 		payload["comment"] = comment
@@ -169,7 +170,7 @@ func (c *Client) AddEntry(listName, address, comment string, disabled bool) erro
 		payload["disabled"] = true
 	}
 	b, _ := json.Marshal(payload)
-	resp, err := c.do("PUT", "/rest/ip/firewall/address-list", strings.NewReader(string(b)))
+	resp, err := c.do(ctx, "PUT", "/rest/ip/firewall/address-list", strings.NewReader(string(b)))
 	if err != nil {
 		return fmt.Errorf("add %s: %w", address, err)
 	}
@@ -185,10 +186,10 @@ func (c *Client) AddEntry(listName, address, comment string, disabled bool) erro
 }
 
 // UpdateEntry updates comment and disabled state of an existing entry by its MikroTik ID.
-func (c *Client) UpdateEntry(id, comment string, disabled bool) error {
+func (c *Client) UpdateEntry(ctx context.Context, id, comment string, disabled bool) error {
 	b, _ := json.Marshal(map[string]any{"comment": comment, "disabled": disabled})
 	// MikroTik IDs look like "*1A" — must NOT be percent-encoded.
-	resp, err := c.do("PATCH", "/rest/ip/firewall/address-list/"+id, strings.NewReader(string(b)))
+	resp, err := c.do(ctx, "PATCH", "/rest/ip/firewall/address-list/"+id, strings.NewReader(string(b)))
 	if err != nil {
 		return fmt.Errorf("update %s: %w", id, err)
 	}
@@ -197,9 +198,9 @@ func (c *Client) UpdateEntry(id, comment string, disabled bool) error {
 }
 
 // SetDisabled sets disabled state on a single entry by ID.
-func (c *Client) SetDisabled(id string, disabled bool) error {
+func (c *Client) SetDisabled(ctx context.Context, id string, disabled bool) error {
 	b, _ := json.Marshal(map[string]any{"disabled": disabled})
-	resp, err := c.do("PATCH", "/rest/ip/firewall/address-list/"+id, strings.NewReader(string(b)))
+	resp, err := c.do(ctx, "PATCH", "/rest/ip/firewall/address-list/"+id, strings.NewReader(string(b)))
 	if err != nil {
 		return fmt.Errorf("set-disabled %s: %w", id, err)
 	}
@@ -208,8 +209,8 @@ func (c *Client) SetDisabled(id string, disabled bool) error {
 }
 
 // DeleteEntry removes an entry by its MikroTik ID.
-func (c *Client) DeleteEntry(id string) error {
-	resp, err := c.do("DELETE", "/rest/ip/firewall/address-list/"+id, nil)
+func (c *Client) DeleteEntry(ctx context.Context, id string) error {
+	resp, err := c.do(ctx, "DELETE", "/rest/ip/firewall/address-list/"+id, nil)
 	if err != nil {
 		return fmt.Errorf("delete %s: %w", id, err)
 	}

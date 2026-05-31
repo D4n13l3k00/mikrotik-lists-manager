@@ -1,6 +1,7 @@
 package syncer_test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -173,7 +174,7 @@ type mockClient struct {
 	failOn  string
 }
 
-func (m *mockClient) AddEntry(list, addr, comment string, disabled bool) error {
+func (m *mockClient) AddEntry(_ context.Context, list, addr, comment string, disabled bool) error {
 	if m.failOn == addr {
 		return fmt.Errorf("mock error")
 	}
@@ -181,7 +182,7 @@ func (m *mockClient) AddEntry(list, addr, comment string, disabled bool) error {
 	return nil
 }
 
-func (m *mockClient) UpdateEntry(id, comment string, disabled bool) error {
+func (m *mockClient) UpdateEntry(_ context.Context, id, comment string, disabled bool) error {
 	if m.failOn == id {
 		return fmt.Errorf("mock error")
 	}
@@ -189,7 +190,7 @@ func (m *mockClient) UpdateEntry(id, comment string, disabled bool) error {
 	return nil
 }
 
-func (m *mockClient) DeleteEntry(id string) error {
+func (m *mockClient) DeleteEntry(_ context.Context, id string) error {
 	if m.failOn == id {
 		return fmt.Errorf("mock error")
 	}
@@ -205,7 +206,7 @@ func TestApplyExecutesChanges(t *testing.T) {
 		{Action: syncer.ActionUpdate, Address: "9.9.9.9", ID: "*2", NewComment: "NEW"},
 	}
 
-	if err := syncer.Apply(client, "test", changes, false, false); err != nil {
+	if err := syncer.Apply(context.Background(), client, "test", changes, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.added) != 1 || client.added[0] != "8.8.8.8" {
@@ -226,7 +227,7 @@ func TestApplyDryRunSkipsAPI(t *testing.T) {
 		{Action: syncer.ActionDelete, ID: "*1"},
 	}
 
-	if err := syncer.Apply(client, "test", changes, true, false); err != nil {
+	if err := syncer.Apply(context.Background(), client, "test", changes, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.added)+len(client.deleted)+len(client.updated) != 0 {
@@ -239,7 +240,7 @@ func TestApplyPropagatesError(t *testing.T) {
 	changes := []syncer.Change{
 		{Action: syncer.ActionAdd, Address: "8.8.8.8"},
 	}
-	if err := syncer.Apply(client, "test", changes, false, false); err == nil {
+	if err := syncer.Apply(context.Background(), client, "test", changes, false, false); err == nil {
 		t.Error("expected error, got nil")
 	}
 }

@@ -1,6 +1,7 @@
 package syncer
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -37,9 +38,9 @@ type Change struct {
 
 // APIClient is the subset of mikrotik.Client used by Apply.
 type APIClient interface {
-	AddEntry(listName, address, comment string, disabled bool) error
-	UpdateEntry(id, comment string, disabled bool) error
-	DeleteEntry(id string) error
+	AddEntry(ctx context.Context, listName, address, comment string, disabled bool) error
+	UpdateEntry(ctx context.Context, id, comment string, disabled bool) error
+	DeleteEntry(ctx context.Context, id string) error
 }
 
 // normalizeAddr canonicalizes an IP/CIDR address for comparison.
@@ -125,7 +126,8 @@ func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) ([]Change
 // Apply executes the changes against MikroTik. If dryRun is true, only prints.
 // When len(changes) >= progressThreshold, shows a progress bar.
 // If verbose is true, per-entry lines are printed above the bar without interleaving.
-func Apply(client APIClient, listName string, changes []Change, dryRun, verbose bool) error {
+// ctx cancellation (e.g. Ctrl+C) stops the loop and returns the context error.
+func Apply(ctx context.Context, client APIClient, listName string, changes []Change, dryRun, verbose bool) error {
 	if len(changes) == 0 {
 		output.Summary(0, 0, 0, dryRun)
 		return nil
@@ -167,11 +169,14 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 	var added, removed, updated int
 
 	for _, ch := range changes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		switch ch.Action {
 		case ActionAdd:
 			printEntry(func() { output.Add(ch.Address, ch.NewComment, ch.NewDisabled) })
 			if !dryRun {
-				if err := client.AddEntry(listName, ch.Address, ch.NewComment, ch.NewDisabled); err != nil {
+				if err := client.AddEntry(ctx, listName, ch.Address, ch.NewComment, ch.NewDisabled); err != nil {
 					return fmt.Errorf("add %s: %w", ch.Address, err)
 				}
 			}
@@ -179,7 +184,7 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 		case ActionDelete:
 			printEntry(func() { output.Remove(ch.Address, "") })
 			if !dryRun {
-				if err := client.DeleteEntry(ch.ID); err != nil {
+				if err := client.DeleteEntry(ctx, ch.ID); err != nil {
 					return fmt.Errorf("delete %s: %w", ch.Address, err)
 				}
 			}
@@ -189,7 +194,7 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 				output.Update(ch.Address, ch.OldComment, ch.NewComment, ch.OldDisabled, ch.NewDisabled)
 			})
 			if !dryRun {
-				if err := client.UpdateEntry(ch.ID, ch.NewComment, ch.NewDisabled); err != nil {
+				if err := client.UpdateEntry(ctx, ch.ID, ch.NewComment, ch.NewDisabled); err != nil {
 					return fmt.Errorf("update %s: %w", ch.Address, err)
 				}
 			}

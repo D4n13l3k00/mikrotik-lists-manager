@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -22,7 +23,7 @@ var disableCmd = &cobra.Command{
   mikrotik-lists-manager disable 8.8.8.8 1.1.1.1 -H 192.168.1.1 -u admin -l VPN_LIST
   mikrotik-lists-manager disable --all -H 192.168.1.1 -u admin -l list1,list2`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSetDisabled(args, disableFlags, disableAll, true)
+		return runSetDisabled(cmd.Context(), args, disableFlags, disableAll, true)
 	},
 }
 
@@ -39,7 +40,7 @@ var enableCmd = &cobra.Command{
   mikrotik-lists-manager enable 8.8.8.8 1.1.1.1 -H 192.168.1.1 -u admin -l VPN_LIST
   mikrotik-lists-manager enable --all -H 192.168.1.1 -u admin -l list1,list2`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSetDisabled(args, enableFlags, enableAll, false)
+		return runSetDisabled(cmd.Context(), args, enableFlags, enableAll, false)
 	},
 }
 
@@ -61,7 +62,7 @@ func init() {
 	}
 }
 
-func runSetDisabled(args []string, flags connFlags, all, disabled bool) error {
+func runSetDisabled(ctx context.Context, args []string, flags connFlags, all, disabled bool) error {
 	if !all && len(args) == 0 {
 		return fmt.Errorf("укажите адреса или используйте --all")
 	}
@@ -101,7 +102,7 @@ func runSetDisabled(args []string, flags connFlags, all, disabled bool) error {
 	}
 
 	for _, listName := range listNames {
-		entries, err := client.GetList(listName)
+		entries, err := client.GetList(ctx, listName)
 		if err != nil {
 			return fmt.Errorf("получение списка %q: %w", listName, err)
 		}
@@ -128,7 +129,7 @@ func runSetDisabled(args []string, flags connFlags, all, disabled bool) error {
 			} else {
 				output.Enable(e.Address, e.Comment)
 			}
-			if err := client.SetDisabled(e.ID, disabled); err != nil {
+			if err := client.SetDisabled(ctx, e.ID, disabled); err != nil {
 				return err
 			}
 			count++
