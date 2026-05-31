@@ -5,19 +5,26 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/parser"
 )
 
+const appendRemoveProgressThreshold = 10
+
 // ── append ────────────────────────────────────────────────────────────────────
 
 var appendFlags connFlags
 var appendDryRun bool
 var appendFormat string
+var appendConcurrency int
 
 var appendCmd = &cobra.Command{
 	Use:   "append [file]",
@@ -40,6 +47,7 @@ func init() {
 	appendCmd.Flags().BoolVarP(&appendFlags.skipTLSVerify, "insecure", "k", false, "Не проверять TLS сертификат")
 	appendCmd.Flags().BoolVarP(&appendDryRun, "dry-run", "n", false, "Показать изменения без применения")
 	appendCmd.Flags().StringVarP(&appendFormat, "format", "f", "auto", "Формат файла: auto, native, mikrotik")
+	appendCmd.Flags().IntVarP(&appendConcurrency, "concurrency", "c", 5, "Число параллельных запросов к API (0 = последовательно)")
 }
 
 func runAppend(cmd *cobra.Command, args []string) error {
@@ -75,6 +83,9 @@ func runAppend(cmd *cobra.Command, args []string) error {
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(appendFlags.skipTLSVerify))
 	ctx := cmd.Context()
+	if info, err := client.GetRouterInfo(ctx); err == nil {
+		output.RouterBanner(routerBannerInfo(info, host))
+	}
 
 	for _, listName := range listNames {
 		current, err := client.GetList(ctx, listName)
@@ -87,39 +98,81 @@ func runAppend(cmd *cobra.Command, args []string) error {
 			existing[strings.ToLower(e.Address)] = true
 		}
 
+		var toAdd []parser.Entry
+		for _, e := range entries {
+			if !existing[strings.ToLower(e.Address)] {
+				toAdd = append(toAdd, e)
+			}
+		}
+		skipped := len(entries) - len(toAdd)
+
 		output.Header(fmt.Sprintf("Добавление в %q на %s", listName, host))
 		if appendDryRun {
 			output.Info("(dry run — изменения не будут применены)")
 		}
 
-		added, skipped := 0, 0
-		for _, e := range entries {
-			if existing[strings.ToLower(e.Address)] {
-				skipped++
-				continue
+		if len(toAdd) == 0 {
+			fmt.Println()
+			output.Info(fmt.Sprintf("Все записи уже есть в списке (%d пропущено).", skipped))
+			continue
+		}
+
+		useProgress := len(toAdd) >= appendRemoveProgressThreshold && !appendDryRun
+		var bar *progressbar.ProgressBar
+		if useProgress {
+			bar = newProgressBar(len(toAdd), "Добавление...")
+		}
+
+		var mu sync.Mutex
+		var added atomic.Int64
+
+		g, gctx := errgroup.WithContext(ctx)
+		if appendConcurrency > 0 {
+			g.SetLimit(appendConcurrency)
+		}
+
+		for _, e := range toAdd {
+			if gctx.Err() != nil {
+				break
 			}
-			output.Add(e.Address, e.Comment, e.Disabled)
-			if !appendDryRun {
-				if err := client.AddEntry(ctx, listName, e.Address, e.Comment, e.Disabled); err != nil {
-					return fmt.Errorf("добавление %s: %w", e.Address, err)
+			g.Go(func() error {
+				if !useProgress {
+					mu.Lock()
+					output.Add(e.Address, e.Comment, e.Disabled)
+					mu.Unlock()
 				}
+				if !appendDryRun {
+					if err := client.AddEntry(gctx, listName, e.Address, e.Comment, e.Disabled); err != nil {
+						return fmt.Errorf("добавление %s: %w", e.Address, err)
+					}
+				}
+				added.Add(1)
+				if useProgress {
+					bar.Add(1) //nolint:errcheck
+				}
+				return nil
+			})
+		}
+
+		if err := g.Wait(); err != nil {
+			if useProgress {
+				fmt.Fprintln(os.Stderr)
 			}
-			added++
+			return err
+		}
+		if useProgress {
+			fmt.Fprintln(os.Stderr)
 		}
 
 		fmt.Println()
-		if added == 0 {
-			output.Info(fmt.Sprintf("Все записи уже есть в списке (%d пропущено).", skipped))
-		} else {
-			msg := fmt.Sprintf("+%d добавлено", added)
-			if skipped > 0 {
-				msg += fmt.Sprintf(", %d уже существовало", skipped)
-			}
-			if appendDryRun {
-				msg += " (dry run)"
-			}
-			output.Info(msg)
+		msg := fmt.Sprintf("+%d добавлено", added.Load())
+		if skipped > 0 {
+			msg += fmt.Sprintf(", %d уже существовало", skipped)
 		}
+		if appendDryRun {
+			msg += " (dry run)"
+		}
+		output.Info(msg)
 	}
 	return nil
 }
@@ -129,6 +182,7 @@ func runAppend(cmd *cobra.Command, args []string) error {
 var removeFlags connFlags
 var removeDryRun bool
 var removeFormat string
+var removeConcurrency int
 
 var removeCmd = &cobra.Command{
 	Use:   "remove [file]",
@@ -151,6 +205,7 @@ func init() {
 	removeCmd.Flags().BoolVarP(&removeFlags.skipTLSVerify, "insecure", "k", false, "Не проверять TLS сертификат")
 	removeCmd.Flags().BoolVarP(&removeDryRun, "dry-run", "n", false, "Показать изменения без применения")
 	removeCmd.Flags().StringVarP(&removeFormat, "format", "f", "auto", "Формат файла: auto, native, mikrotik")
+	removeCmd.Flags().IntVarP(&removeConcurrency, "concurrency", "c", 5, "Число параллельных запросов к API (0 = последовательно)")
 }
 
 func runRemove(cmd *cobra.Command, args []string) error {
@@ -191,6 +246,9 @@ func runRemove(cmd *cobra.Command, args []string) error {
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(removeFlags.skipTLSVerify))
 	ctx := cmd.Context()
+	if info, err := client.GetRouterInfo(ctx); err == nil {
+		output.RouterBanner(routerBannerInfo(info, host))
+	}
 
 	for _, listName := range listNames {
 		current, err := client.GetList(ctx, listName)
@@ -203,49 +261,107 @@ func runRemove(cmd *cobra.Command, args []string) error {
 			output.Info("(dry run — изменения не будут применены)")
 		}
 
-		// copy to track not-found
 		notFoundSet := make(map[string]bool, len(toRemove))
 		for k := range toRemove {
 			notFoundSet[k] = true
 		}
 
-		removed := 0
+		var toDelete []mikrotik.AddressListEntry
 		for _, e := range current {
-			if !toRemove[strings.ToLower(e.Address)] {
-				continue
+			if toRemove[strings.ToLower(e.Address)] {
+				toDelete = append(toDelete, e)
+				delete(notFoundSet, strings.ToLower(e.Address))
 			}
-			output.Remove(e.Address, e.Comment)
-			if !removeDryRun {
-				if err := client.DeleteEntry(ctx, e.ID); err != nil {
-					return fmt.Errorf("удаление %s: %w", e.Address, err)
-				}
-			}
-			delete(notFoundSet, strings.ToLower(e.Address))
-			removed++
 		}
 
 		for addr := range notFoundSet {
 			output.Warn(fmt.Sprintf("%s не найден в списке на роутере", addr))
 		}
 
-		fmt.Println()
-		if removed == 0 && len(notFoundSet) == 0 {
+		if len(toDelete) == 0 {
+			fmt.Println()
 			output.Info("Нечего удалять.")
-		} else {
-			msg := fmt.Sprintf("−%d удалено", removed)
-			if len(notFoundSet) > 0 {
-				msg += fmt.Sprintf(", %d не найдено на роутере", len(notFoundSet))
-			}
-			if removeDryRun {
-				msg += " (dry run)"
-			}
-			output.Info(msg)
+			continue
 		}
+
+		useProgress := len(toDelete) >= appendRemoveProgressThreshold && !removeDryRun
+		var bar *progressbar.ProgressBar
+		if useProgress {
+			bar = newProgressBar(len(toDelete), "Удаление...")
+		}
+
+		var mu sync.Mutex
+		var removed atomic.Int64
+
+		g, gctx := errgroup.WithContext(ctx)
+		if removeConcurrency > 0 {
+			g.SetLimit(removeConcurrency)
+		}
+
+		for _, e := range toDelete {
+			if gctx.Err() != nil {
+				break
+			}
+			g.Go(func() error {
+				if !useProgress {
+					mu.Lock()
+					output.Remove(e.Address, e.Comment)
+					mu.Unlock()
+				}
+				if !removeDryRun {
+					if err := client.DeleteEntry(gctx, e.ID); err != nil {
+						return fmt.Errorf("удаление %s: %w", e.Address, err)
+					}
+				}
+				removed.Add(1)
+				if useProgress {
+					bar.Add(1) //nolint:errcheck
+				}
+				return nil
+			})
+		}
+
+		if err := g.Wait(); err != nil {
+			if useProgress {
+				fmt.Fprintln(os.Stderr)
+			}
+			return err
+		}
+		if useProgress {
+			fmt.Fprintln(os.Stderr)
+		}
+
+		fmt.Println()
+		msg := fmt.Sprintf("−%d удалено", removed.Load())
+		if len(notFoundSet) > 0 {
+			msg += fmt.Sprintf(", %d не найдено на роутере", len(notFoundSet))
+		}
+		if removeDryRun {
+			msg += " (dry run)"
+		}
+		output.Info(msg)
 	}
 	return nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+func newProgressBar(total int, desc string) *progressbar.ProgressBar {
+	return progressbar.NewOptions(total,
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionSetWidth(40),
+		progressbar.OptionShowCount(),
+		progressbar.OptionSetDescription("[cyan]"+desc+"[reset]"),
+		progressbar.OptionSetTheme(progressbar.Theme{
+			Saucer:        "[green]=[reset]",
+			SaucerHead:    "[green]>[reset]",
+			SaucerPadding: " ",
+			BarStart:      "[",
+			BarEnd:        "]",
+		}),
+	)
+}
 
 func readFileOrStdin(path string) ([]byte, error) {
 	if path == "-" {

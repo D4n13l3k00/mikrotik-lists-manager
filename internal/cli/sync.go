@@ -16,6 +16,7 @@ var syncFlags connFlags
 var syncDryRun bool
 var syncFormat string
 var syncVerbose bool
+var syncConcurrency int
 
 var syncCmd = &cobra.Command{
 	Use:   "sync [file]",
@@ -43,6 +44,7 @@ func init() {
 	syncCmd.Flags().BoolVarP(&syncDryRun, "dry-run", "n", false, "Показать изменения без применения")
 	syncCmd.Flags().StringVarP(&syncFormat, "format", "f", "auto", "Формат входного файла: auto, native, mikrotik")
 	syncCmd.Flags().BoolVarP(&syncVerbose, "verbose", "v", false, "Выводить каждую запись даже при прогресс-баре")
+	syncCmd.Flags().IntVarP(&syncConcurrency, "concurrency", "c", 5, "Число параллельных запросов к API (0 = последовательно)")
 }
 
 func runSync(cmd *cobra.Command, args []string) error {
@@ -84,9 +86,12 @@ func runSync(cmd *cobra.Command, args []string) error {
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(syncFlags.skipTLSVerify))
 
 	ctx := cmd.Context()
+	if info, err := client.GetRouterInfo(ctx); err == nil {
+		output.RouterBanner(routerBannerInfo(info, host))
+	}
+
 	g := new(errgroup.Group)
 	for _, listName := range listNames {
-		listName := listName
 		g.Go(func() error {
 			output.Header(fmt.Sprintf("Синхронизация %q на %s", listName, host))
 
@@ -110,7 +115,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 				output.Info("(dry run — изменения не будут применены)")
 			}
 
-			return syncer.Apply(ctx, client, listName, changes, syncDryRun, syncVerbose)
+			return syncer.Apply(ctx, client, listName, changes, syncDryRun, syncVerbose, syncConcurrency)
 		})
 	}
 	return g.Wait()
