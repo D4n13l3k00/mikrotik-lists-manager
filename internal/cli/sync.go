@@ -86,6 +86,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(syncFlags.skipTLSVerify))
 
 	ctx := cmd.Context()
+	if info, err := client.GetRouterInfo(ctx); err == nil {
+		output.RouterBanner(routerBannerInfo(info, host))
+	}
+
 	g := new(errgroup.Group)
 	for _, listName := range listNames {
 		g.Go(func() error {

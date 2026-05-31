@@ -83,6 +83,9 @@ func runAppend(cmd *cobra.Command, args []string) error {
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(appendFlags.skipTLSVerify))
 	ctx := cmd.Context()
+	if info, err := client.GetRouterInfo(ctx); err == nil {
+		output.RouterBanner(routerBannerInfo(info, host))
+	}
 
 	for _, listName := range listNames {
 		current, err := client.GetList(ctx, listName)
@@ -243,6 +246,9 @@ func runRemove(cmd *cobra.Command, args []string) error {
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(removeFlags.skipTLSVerify))
 	ctx := cmd.Context()
+	if info, err := client.GetRouterInfo(ctx); err == nil {
+		output.RouterBanner(routerBannerInfo(info, host))
+	}
 
 	for _, listName := range listNames {
 		current, err := client.GetList(ctx, listName)

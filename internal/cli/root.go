@@ -14,6 +14,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/config"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
 )
 
@@ -166,6 +167,7 @@ func init() {
 	rootCmd.AddCommand(disableCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(fetchCmd)
+	rootCmd.AddCommand(infoCmd)
 
 	rootCmd.CompletionOptions.HiddenDefaultCmd = true
 
@@ -311,6 +313,27 @@ var configShowCmd = &cobra.Command{
 func init() {
 	configCmd.AddCommand(configInitCmd)
 	configCmd.AddCommand(configShowCmd)
+}
+
+func routerBannerInfo(info *mikrotik.RouterInfo, host string) output.RouterBannerInfo {
+	return output.RouterBannerInfo{
+		Host:            host,
+		BoardName:       info.BoardName,
+		Version:         info.Version,
+		Architecture:    info.Architecture,
+		CPU:             info.CPU,
+		CPUCount:        info.CPUCount,
+		TotalMemory:     info.TotalMemory,
+		FreeMemory:      info.FreeMemory,
+		Uptime:          info.Uptime,
+		Model:           info.Model,
+		Revision:        info.Revision,
+		SerialNumber:    info.SerialNumber,
+		FirmwareType:    info.FirmwareType,
+		FactoryFirmware: info.FactoryFirmware,
+		CurrentFirmware: info.CurrentFirmware,
+		UpgradeFirmware: info.UpgradeFirmware,
+	}
 }
 
 func orEmpty(s string) string {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -216,4 +217,107 @@ func (c *Client) DeleteEntry(ctx context.Context, id string) error {
 	}
 	defer resp.Body.Close()
 	return checkStatus(resp)
+}
+
+// RouterInfo holds combined system info fetched from /rest/system/resource and /rest/system/routerboard.
+type RouterInfo struct {
+	BoardName       string
+	Version         string
+	Uptime          string
+	Architecture    string
+	CPU             string
+	CPUCount        string
+	TotalMemory     string
+	FreeMemory      string
+	// routerboard fields (empty for CHR/x86)
+	Model           string
+	Revision        string
+	SerialNumber    string
+	FirmwareType    string
+	FactoryFirmware string
+	CurrentFirmware string
+	UpgradeFirmware string
+}
+
+type systemResource struct {
+	BoardName    string `json:"board-name"`
+	Version      string `json:"version"`
+	Uptime       string `json:"uptime"`
+	Architecture string `json:"architecture-name"`
+	CPU          string `json:"cpu"`
+	CPUCount     string `json:"cpu-count"`
+	TotalMemory  string `json:"total-memory"`
+	FreeMemory   string `json:"free-memory"`
+}
+
+type routerBoard struct {
+	Model           string `json:"model"`
+	Revision        string `json:"revision"`
+	SerialNumber    string `json:"serial-number"`
+	FirmwareType    string `json:"firmware-type"`
+	FactoryFirmware string `json:"factory-firmware"`
+	CurrentFirmware string `json:"current-firmware"`
+	UpgradeFirmware string `json:"upgrade-firmware"`
+}
+
+// GetRouterInfo fetches system resource and routerboard info concurrently.
+// RouterBoard endpoint failure is non-fatal (CHR/x86 devices have no routerboard).
+func (c *Client) GetRouterInfo(ctx context.Context) (*RouterInfo, error) {
+	var res systemResource
+	var rb routerBoard
+	var resErr error
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		resp, err := c.do(ctx, "GET", "/rest/system/resource", nil)
+		if err != nil {
+			resErr = err
+			return
+		}
+		defer resp.Body.Close()
+		if err := checkStatus(resp); err != nil {
+			resErr = err
+			return
+		}
+		json.NewDecoder(resp.Body).Decode(&res) //nolint:errcheck
+	}()
+
+	go func() {
+		defer wg.Done()
+		resp, err := c.do(ctx, "GET", "/rest/system/routerboard", nil)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		if checkStatus(resp) != nil {
+			return
+		}
+		json.NewDecoder(resp.Body).Decode(&rb) //nolint:errcheck
+	}()
+
+	wg.Wait()
+
+	if resErr != nil {
+		return nil, fmt.Errorf("system/resource: %w", resErr)
+	}
+	return &RouterInfo{
+		BoardName:       res.BoardName,
+		Version:         res.Version,
+		Uptime:          res.Uptime,
+		Architecture:    res.Architecture,
+		CPU:             res.CPU,
+		CPUCount:        res.CPUCount,
+		TotalMemory:     res.TotalMemory,
+		FreeMemory:      res.FreeMemory,
+		Model:           rb.Model,
+		Revision:        rb.Revision,
+		SerialNumber:    rb.SerialNumber,
+		FirmwareType:    rb.FirmwareType,
+		FactoryFirmware: rb.FactoryFirmware,
+		CurrentFirmware: rb.CurrentFirmware,
+		UpgradeFirmware: rb.UpgradeFirmware,
+	}, nil
 }

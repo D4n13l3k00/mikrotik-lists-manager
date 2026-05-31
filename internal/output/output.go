@@ -4,6 +4,7 @@ package output
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -206,6 +207,125 @@ func Summary(added, removed, updated int, dryRun bool) {
 	} else {
 		fmt.Println(styleSummaryOk.Render("  " + msg + "  "))
 	}
+}
+
+// RouterBanner prints a styled box with router identity shown at command start.
+// firmware may be empty for CHR/x86 devices.
+// RouterBannerInfo is the display data for RouterBanner.
+type RouterBannerInfo struct {
+	Host            string
+	BoardName       string
+	Version         string
+	Architecture    string
+	CPU             string
+	CPUCount        string
+	TotalMemory     string
+	FreeMemory      string
+	Uptime          string
+	// routerboard fields (empty for CHR/x86)
+	Model           string
+	Revision        string
+	SerialNumber    string
+	FirmwareType    string
+	FactoryFirmware string
+	CurrentFirmware string
+	UpgradeFirmware string
+}
+
+func RouterBanner(r RouterBannerInfo) {
+	kv := func(k, v string) string {
+		return fmt.Sprintf("  %s  %s",
+			styleKey.Render(fmt.Sprintf("%-12s", k)),
+			styleVal.Render(v),
+		)
+	}
+	kvDim := func(k, v string) string {
+		return fmt.Sprintf("  %s  %s",
+			styleKey.Render(fmt.Sprintf("%-12s", k)),
+			styleDim.Render(v),
+		)
+	}
+	sep := func() string {
+		return styleDim.Render("  " + strings.Repeat("─", 40))
+	}
+
+	title := lipgloss.NewStyle().Foreground(white).Bold(true).Render(r.BoardName)
+	if r.Host != "" {
+		title += styleDim.Render("  ─  " + r.Host)
+	}
+
+	lines := []string{title}
+
+	// system/resource section
+	rosLine := r.Version
+	if r.Architecture != "" {
+		rosLine += styleDim.Render("  ·  " + r.Architecture)
+	}
+	lines = append(lines, kv("RouterOS", rosLine))
+
+	if r.CPU != "" {
+		cpu := r.CPU
+		if r.CPUCount != "" && r.CPUCount != "1" {
+			cpu += styleDim.Render(" ×" + r.CPUCount)
+		}
+		lines = append(lines, kv("CPU", cpu))
+	}
+
+	if r.TotalMemory != "" {
+		lines = append(lines, kv("Memory", formatMemory(r.FreeMemory, r.TotalMemory)))
+	}
+
+	lines = append(lines, kv("Uptime", r.Uptime))
+
+	// routerboard section
+	if r.Model != "" || r.SerialNumber != "" {
+		lines = append(lines, sep())
+		if r.Model != "" {
+			model := r.Model
+			if r.Revision != "" {
+				model += styleDim.Render("  rev " + r.Revision)
+			}
+			lines = append(lines, kv("Model", model))
+		}
+		if r.SerialNumber != "" {
+			lines = append(lines, kvDim("Serial", r.SerialNumber))
+		}
+		if r.CurrentFirmware != "" {
+			fw := r.CurrentFirmware
+			if r.UpgradeFirmware != "" && r.UpgradeFirmware != r.CurrentFirmware {
+				fw += styleWarn.Render("  → " + r.UpgradeFirmware + " available")
+			}
+			if r.FirmwareType != "" {
+				fw += styleDim.Render("  (" + r.FirmwareType + ")")
+			}
+			lines = append(lines, kv("Firmware", fw))
+		}
+		if r.FactoryFirmware != "" {
+			lines = append(lines, kvDim("Factory FW", r.FactoryFirmware))
+		}
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(blue).
+		Padding(0, 1).
+		Render(strings.Join(lines, "\n"))
+
+	fmt.Println()
+	fmt.Println(box)
+	fmt.Println()
+}
+
+func formatMemory(free, total string) string {
+	freeB, err1 := strconv.ParseInt(free, 10, 64)
+	totalB, err2 := strconv.ParseInt(total, 10, 64)
+	if err1 != nil || err2 != nil {
+		if total != "" {
+			return total + " B"
+		}
+		return ""
+	}
+	return fmt.Sprintf("%d MiB free / %d MiB", freeB/1024/1024, totalB/1024/1024)
 }
 
 // ListRow prints one row of the `list` command output.
