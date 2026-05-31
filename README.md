@@ -366,12 +366,23 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | AWS | `aws` | ip-ranges.amazonaws.com |
 | Azure | `azure` | Microsoft Download Center |
 | Fastly | `fastly` | api.fastly.com/public-ip-list |
+| Akamai | `akamai` | RIPE STAT (AS20940, AS16625) |
+| DigitalOcean | `digitalocean` | RIPE STAT (AS14061) |
+| Hetzner | `hetzner` | RIPE STAT (AS24940) |
+| OVHcloud | `ovh` | RIPE STAT (AS16276) |
+| Meta (FB/IG/WA) | `meta` | RIPE STAT (AS32934, AS63293, AS54115) |
+| Twitter / X | `twitter` | RIPE STAT (AS13414, AS35995) |
+| TikTok / ByteDance | `tiktok` | RIPE STAT (AS396986, AS138699) |
+| Discord | `discord` | RIPE STAT (AS36459) |
+| LinkedIn | `linkedin` | RIPE STAT (AS14413) |
 | Telegram | `telegram` | core.telegram.org/resources/cidr.txt |
+| Tor exit nodes | `tor` | check.torproject.org/torbulkexitlist |
 | GitHub | `github` | api.github.com/meta (выбор сервисов) |
 | Oracle Cloud | `oracle` | docs.oracle.com (выбор регионов) |
 
 GitHub поддерживает выбор сервисов через `/`: `github/copilot`, `github/actions`, `github/web` и др.
 Oracle поддерживает выбор регионов через `/`: `oracle/eu-frankfurt-1`, `oracle/us-ashburn-1` и др.
+Провайдеры на базе RIPE STAT используют данные BGP-анонсов (`stat.ripe.net`).
 
 ```bash
 # интерактивный TUI-выбор
@@ -382,6 +393,12 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 # конкретные провайдеры
 ./mikrotik-lists-manager fetch -p cloudflare,telegram -o ranges.lst
+
+# заблокированные в РФ сервисы
+./mikrotik-lists-manager fetch -p meta,twitter,tiktok,discord,linkedin -o blocked.lst
+
+# Tor exit nodes
+./mikrotik-lists-manager fetch -p tor -o tor.lst
 
 # GitHub — только Copilot и Web
 ./mikrotik-lists-manager fetch -p github/copilot,github/web -o ranges.lst
