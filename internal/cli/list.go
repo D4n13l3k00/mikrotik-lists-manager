@@ -48,7 +48,7 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(listFlags.skipTLSVerify))
 
-	entries, err := client.GetAllEntries()
+	entries, err := client.GetAllEntries(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("получение списков: %w", err)
 	}

@@ -1,8 +1,11 @@
 package syncer
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"os"
+	"strings"
 
 	"github.com/schollz/progressbar/v3"
 
@@ -35,31 +38,57 @@ type Change struct {
 
 // APIClient is the subset of mikrotik.Client used by Apply.
 type APIClient interface {
-	AddEntry(listName, address, comment string, disabled bool) error
-	UpdateEntry(id, comment string, disabled bool) error
-	DeleteEntry(id string) error
+	AddEntry(ctx context.Context, listName, address, comment string, disabled bool) error
+	UpdateEntry(ctx context.Context, id, comment string, disabled bool) error
+	DeleteEntry(ctx context.Context, id string) error
+}
+
+// normalizeAddr canonicalizes an IP/CIDR address for comparison.
+// Bare IPs are expanded to /32 (IPv4) or /128 (IPv6) so that "8.8.8.8" and
+// "8.8.8.8/32" resolve to the same key. Non-IP values (domains, MACs) are
+// returned unchanged.
+func normalizeAddr(s string) string {
+	if strings.Contains(s, "/") {
+		ip, ipnet, err := net.ParseCIDR(s)
+		if err != nil {
+			return s
+		}
+		ones, _ := ipnet.Mask.Size()
+		return fmt.Sprintf("%s/%d", ip.String(), ones)
+	}
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return s
+	}
+	if ip.To4() != nil {
+		return s + "/32"
+	}
+	return s + "/128"
 }
 
 // Diff computes what needs to change to make MikroTik match desired.
 // Returns changes and a list of duplicate addresses found in desired.
+// Addresses are normalized before comparison so that "8.8.8.8" and "8.8.8.8/32"
+// are treated as the same entry.
 func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) ([]Change, []string) {
 	currentMap := make(map[string]mikrotik.AddressListEntry, len(current))
 	for _, e := range current {
-		currentMap[e.Address] = e
+		currentMap[normalizeAddr(e.Address)] = e
 	}
 	desiredMap := make(map[string]parser.Entry, len(desired))
 	var duplicates []string
 	for _, e := range desired {
-		if _, exists := desiredMap[e.Address]; exists {
+		key := normalizeAddr(e.Address)
+		if _, exists := desiredMap[key]; exists {
 			duplicates = append(duplicates, e.Address)
 		}
-		desiredMap[e.Address] = e
+		desiredMap[key] = e
 	}
 
 	var changes []Change
 
 	for _, want := range desired {
-		if have, exists := currentMap[want.Address]; exists {
+		if have, exists := currentMap[normalizeAddr(want.Address)]; exists {
 			if have.Comment != want.Comment || have.Disabled.Bool() != want.Disabled {
 				changes = append(changes, Change{
 					Action:      ActionUpdate,
@@ -82,7 +111,7 @@ func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) ([]Change
 	}
 
 	for _, have := range current {
-		if _, wanted := desiredMap[have.Address]; !wanted {
+		if _, wanted := desiredMap[normalizeAddr(have.Address)]; !wanted {
 			changes = append(changes, Change{
 				Action:  ActionDelete,
 				Address: have.Address,
@@ -97,7 +126,8 @@ func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) ([]Change
 // Apply executes the changes against MikroTik. If dryRun is true, only prints.
 // When len(changes) >= progressThreshold, shows a progress bar.
 // If verbose is true, per-entry lines are printed above the bar without interleaving.
-func Apply(client APIClient, listName string, changes []Change, dryRun, verbose bool) error {
+// ctx cancellation (e.g. Ctrl+C) stops the loop and returns the context error.
+func Apply(ctx context.Context, client APIClient, listName string, changes []Change, dryRun, verbose bool) error {
 	if len(changes) == 0 {
 		output.Summary(0, 0, 0, dryRun)
 		return nil
@@ -139,11 +169,14 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 	var added, removed, updated int
 
 	for _, ch := range changes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		switch ch.Action {
 		case ActionAdd:
 			printEntry(func() { output.Add(ch.Address, ch.NewComment, ch.NewDisabled) })
 			if !dryRun {
-				if err := client.AddEntry(listName, ch.Address, ch.NewComment, ch.NewDisabled); err != nil {
+				if err := client.AddEntry(ctx, listName, ch.Address, ch.NewComment, ch.NewDisabled); err != nil {
 					return fmt.Errorf("add %s: %w", ch.Address, err)
 				}
 			}
@@ -151,7 +184,7 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 		case ActionDelete:
 			printEntry(func() { output.Remove(ch.Address, "") })
 			if !dryRun {
-				if err := client.DeleteEntry(ch.ID); err != nil {
+				if err := client.DeleteEntry(ctx, ch.ID); err != nil {
 					return fmt.Errorf("delete %s: %w", ch.Address, err)
 				}
 			}
@@ -161,7 +194,7 @@ func Apply(client APIClient, listName string, changes []Change, dryRun, verbose 
 				output.Update(ch.Address, ch.OldComment, ch.NewComment, ch.OldDisabled, ch.NewDisabled)
 			})
 			if !dryRun {
-				if err := client.UpdateEntry(ch.ID, ch.NewComment, ch.NewDisabled); err != nil {
+				if err := client.UpdateEntry(ctx, ch.ID, ch.NewComment, ch.NewDisabled); err != nil {
 					return fmt.Errorf("update %s: %w", ch.Address, err)
 				}
 			}

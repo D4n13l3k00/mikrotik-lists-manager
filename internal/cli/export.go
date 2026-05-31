@@ -64,6 +64,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 	}
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(exportFlags.skipTLSVerify))
+	ctx := cmd.Context()
 
 	var sb strings.Builder
 	totalEntries := 0
@@ -71,7 +72,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 	for _, listName := range listNames {
 		output.Header(fmt.Sprintf("Экспорт списка %q с %s", listName, host))
 
-		entries, err := client.GetList(listName)
+		entries, err := client.GetList(ctx, listName)
 		if err != nil {
 			return fmt.Errorf("получение списка %q: %w", listName, err)
 		}

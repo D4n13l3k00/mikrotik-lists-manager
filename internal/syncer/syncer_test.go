@@ -1,6 +1,7 @@
 package syncer_test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -138,6 +139,32 @@ func TestDiffDuplicates(t *testing.T) {
 	}
 }
 
+func TestDiffAddrNormalization(t *testing.T) {
+	// Router returns 8.8.8.8/32, file has bare 8.8.8.8 — must be treated as the same entry.
+	desired := []parser.Entry{entry("8.8.8.8", "DNS")}
+	cur := []mikrotik.AddressListEntry{current("*1", "8.8.8.8/32", "DNS", false)}
+	changes, _ := syncer.Diff(desired, cur)
+	if len(changes) != 0 {
+		t.Errorf("expected no changes after normalization, got %d: %+v", len(changes), changes)
+	}
+}
+
+func TestDiffAddrNormalizationUpdate(t *testing.T) {
+	// Same address mismatch but comment differs — must produce Update, not Add+Delete.
+	desired := []parser.Entry{entry("1.1.1.1", "NEW")}
+	cur := []mikrotik.AddressListEntry{current("*2", "1.1.1.1/32", "OLD", false)}
+	changes, _ := syncer.Diff(desired, cur)
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change, got %d: %+v", len(changes), changes)
+	}
+	if changes[0].Action != syncer.ActionUpdate {
+		t.Errorf("expected ActionUpdate, got %v", changes[0].Action)
+	}
+	if changes[0].ID != "*2" {
+		t.Errorf("expected ID *2, got %q", changes[0].ID)
+	}
+}
+
 // ── Apply tests ───────────────────────────────────────────────────────────────
 
 type mockClient struct {
@@ -147,7 +174,7 @@ type mockClient struct {
 	failOn  string
 }
 
-func (m *mockClient) AddEntry(list, addr, comment string, disabled bool) error {
+func (m *mockClient) AddEntry(_ context.Context, list, addr, comment string, disabled bool) error {
 	if m.failOn == addr {
 		return fmt.Errorf("mock error")
 	}
@@ -155,7 +182,7 @@ func (m *mockClient) AddEntry(list, addr, comment string, disabled bool) error {
 	return nil
 }
 
-func (m *mockClient) UpdateEntry(id, comment string, disabled bool) error {
+func (m *mockClient) UpdateEntry(_ context.Context, id, comment string, disabled bool) error {
 	if m.failOn == id {
 		return fmt.Errorf("mock error")
 	}
@@ -163,7 +190,7 @@ func (m *mockClient) UpdateEntry(id, comment string, disabled bool) error {
 	return nil
 }
 
-func (m *mockClient) DeleteEntry(id string) error {
+func (m *mockClient) DeleteEntry(_ context.Context, id string) error {
 	if m.failOn == id {
 		return fmt.Errorf("mock error")
 	}
@@ -179,7 +206,7 @@ func TestApplyExecutesChanges(t *testing.T) {
 		{Action: syncer.ActionUpdate, Address: "9.9.9.9", ID: "*2", NewComment: "NEW"},
 	}
 
-	if err := syncer.Apply(client, "test", changes, false, false); err != nil {
+	if err := syncer.Apply(context.Background(), client, "test", changes, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.added) != 1 || client.added[0] != "8.8.8.8" {
@@ -200,7 +227,7 @@ func TestApplyDryRunSkipsAPI(t *testing.T) {
 		{Action: syncer.ActionDelete, ID: "*1"},
 	}
 
-	if err := syncer.Apply(client, "test", changes, true, false); err != nil {
+	if err := syncer.Apply(context.Background(), client, "test", changes, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.added)+len(client.deleted)+len(client.updated) != 0 {
@@ -213,7 +240,7 @@ func TestApplyPropagatesError(t *testing.T) {
 	changes := []syncer.Change{
 		{Action: syncer.ActionAdd, Address: "8.8.8.8"},
 	}
-	if err := syncer.Apply(client, "test", changes, false, false); err == nil {
+	if err := syncer.Apply(context.Background(), client, "test", changes, false, false); err == nil {
 		t.Error("expected error, got nil")
 	}
 }
