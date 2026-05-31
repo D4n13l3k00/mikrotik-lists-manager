@@ -366,7 +366,29 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | AWS | `aws` | ip-ranges.amazonaws.com |
 | Azure | `azure` | Microsoft Download Center |
 | Fastly | `fastly` | api.fastly.com/public-ip-list |
+| Akamai | `akamai` | techdocs.akamai.com |
+| DigitalOcean | `digitalocean` | digitalocean.com/geo/google.csv |
+| Hetzner | `hetzner` | RIPE STAT (AS24940) |
+| OVH | `ovh` | RIPE STAT (AS16276) |
+| Meta | `meta` | AS32934, AS63293 |
+| Twitter / X | `twitter` | RIPE STAT (AS13414) |
+| TikTok / ByteDance | `tiktok` | RIPE STAT (AS396986, AS138699) |
+| Discord | `discord` | RIPE STAT (AS36459) |
+| LinkedIn | `linkedin` | RIPE STAT (AS14413) |
+| Pornhub / MindGeek | `pornhub` | RIPE STAT (AS55222, AS29789) |
+| Netflix | `netflix` | RIPE STAT (AS2906) |
+| Twitch | `twitch` | RIPE STAT (AS46489) |
+| Steam / Valve | `steam` | RIPE STAT (AS32590) |
+| Blizzard | `blizzard` | RIPE STAT (AS57976, AS209242) |
+| Riot Games | `riot` | RIPE STAT (AS6507, AS26008) |
+| Apple | `apple` | RIPE STAT (AS714, AS6185) |
+| Yandex | `yandex` | RIPE STAT (AS13238) |
+| VK | `vk` | RIPE STAT (AS47541, AS44507) |
+| Mail.ru | `mailru` | RIPE STAT (AS47764, AS57620) |
+| Zoom | `zoom` | RIPE STAT (AS8100, AS21929) |
+| Reddit | `reddit` | RIPE STAT (AS54009, AS22616) |
 | Telegram | `telegram` | core.telegram.org/resources/cidr.txt |
+| Tor | `tor` | check.torproject.org/torbulkexitlist |
 | GitHub | `github` | api.github.com/meta (выбор сервисов) |
 | Oracle Cloud | `oracle` | docs.oracle.com (выбор регионов) |
 
