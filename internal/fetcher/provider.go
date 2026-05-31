@@ -53,6 +53,7 @@ var All = []Provider{
 	appleProvider,
 	yandexProvider,
 	vkProvider,
+	telegaProvider,
 	mailruProvider,
 	zoomProvider,
 	redditProvider,
