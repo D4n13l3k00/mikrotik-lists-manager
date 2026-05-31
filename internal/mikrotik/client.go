@@ -96,9 +96,17 @@ func (c *Client) do(method, path string, body io.Reader) (*http.Response, error)
 		}
 		req.Header.Set("Accept", "application/json")
 		resp, err = c.httpClient.Do(req)
-		if err == nil {
+		if err != nil {
+			continue
+		}
+		// Non-5xx (success or client error) or final attempt: stop retrying.
+		if resp.StatusCode < 500 || attempt == 2 {
 			break
 		}
+		// Transient server error: drain body and retry.
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck
+		resp.Body.Close()
+		resp = nil
 	}
 	return resp, err
 }
