@@ -129,6 +129,9 @@ func runAppend(cmd *cobra.Command, args []string) error {
 		}
 
 		for _, e := range toAdd {
+			if gctx.Err() != nil {
+				break
+			}
 			g.Go(func() error {
 				if !useProgress {
 					mu.Lock()
@@ -290,6 +293,9 @@ func runRemove(cmd *cobra.Command, args []string) error {
 		}
 
 		for _, e := range toDelete {
+			if gctx.Err() != nil {
+				break
+			}
 			g.Go(func() error {
 				if !useProgress {
 					mu.Lock()

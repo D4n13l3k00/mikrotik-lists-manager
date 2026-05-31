@@ -180,6 +180,9 @@ func Apply(ctx context.Context, client APIClient, listName string, changes []Cha
 	}
 
 	for _, ch := range changes {
+		if gctx.Err() != nil {
+			break
+		}
 		g.Go(func() error {
 			switch ch.Action {
 			case ActionAdd:
