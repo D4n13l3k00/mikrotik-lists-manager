@@ -354,6 +354,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 |------|----------|----------|
 | `--output` | `-o` | Путь к выходному файлу (обязательный) |
 | `--provider` | `-p` | Провайдеры: `-p cloudflare,google` или `-p cloudflare -p google` |
+| `--asn` | `-A` | Произвольный ASN через RIPE STAT: `-A AS12345` или `-A 12345,67890` |
 | `--all` | `-a` | Скачать все провайдеры без интерактивного выбора |
 | `--timeout` | `-t` | Таймаут HTTP-запроса в секундах (по умолчанию 30) |
 
@@ -384,6 +385,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | Apple | `apple` | RIPE STAT (AS714, AS6185) |
 | Yandex | `yandex` | RIPE STAT (AS13238) |
 | VK | `vk` | RIPE STAT (AS47541, AS44507) |
+| Telega (VK) | `telega` | RIPE STAT (AS203502) |
 | Mail.ru | `mailru` | RIPE STAT (AS47764, AS57620) |
 | Zoom | `zoom` | RIPE STAT (AS8100, AS21929) |
 | Reddit | `reddit` | RIPE STAT (AS54009, AS22616) |
@@ -413,6 +415,13 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 # смешанно
 ./mikrotik-lists-manager fetch -p cloudflare,telegram,github/copilot -o ranges.lst
+
+# произвольный ASN
+./mikrotik-lists-manager fetch -A AS55222 -o pornhub.lst
+./mikrotik-lists-manager fetch -A 12345,67890 -o custom.lst
+
+# ASN вместе с провайдерами
+./mikrotik-lists-manager fetch -A AS203502 -p telegram -o combined.lst
 ```
 
 Если провайдер недоступен — выводится предупреждение, остальные продолжают скачиваться.
