@@ -44,6 +44,7 @@ var All = []Provider{
 	tiktokProvider,
 	discordProvider,
 	linkedinProvider,
+	pornhubProvider,
 	{Name: "Telegram",    Slug: "telegram",    Fetch: fetchTelegram},
 	torProvider,
 	githubProvider,
