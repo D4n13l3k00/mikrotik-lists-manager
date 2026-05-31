@@ -6,8 +6,11 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/schollz/progressbar/v3"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
@@ -126,8 +129,8 @@ func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) ([]Change
 // Apply executes the changes against MikroTik. If dryRun is true, only prints.
 // When len(changes) >= progressThreshold, shows a progress bar.
 // If verbose is true, per-entry lines are printed above the bar without interleaving.
-// ctx cancellation (e.g. Ctrl+C) stops the loop and returns the context error.
-func Apply(ctx context.Context, client APIClient, listName string, changes []Change, dryRun, verbose bool) error {
+// concurrency controls how many API requests run in parallel (0 = sequential).
+func Apply(ctx context.Context, client APIClient, listName string, changes []Change, dryRun, verbose bool, concurrency int) error {
 	if len(changes) == 0 {
 		output.Summary(0, 0, 0, dryRun)
 		return nil
@@ -153,9 +156,12 @@ func Apply(ctx context.Context, client APIClient, listName string, changes []Cha
 		)
 	}
 
+	var mu sync.Mutex
 	// printEntry clears the bar, prints the line, then redraws the bar so
 	// text and bar never appear on the same line.
 	printEntry := func(fn func()) {
+		mu.Lock()
+		defer mu.Unlock()
 		if useProgress && verbose {
 			bar.Clear()        //nolint:errcheck
 			fn()
@@ -166,49 +172,61 @@ func Apply(ctx context.Context, client APIClient, listName string, changes []Cha
 		// useProgress && !verbose: skip per-entry output entirely
 	}
 
-	var added, removed, updated int
+	var added, removed, updated atomic.Int64
+
+	g, gctx := errgroup.WithContext(ctx)
+	if concurrency > 0 {
+		g.SetLimit(concurrency)
+	}
 
 	for _, ch := range changes {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		switch ch.Action {
-		case ActionAdd:
-			printEntry(func() { output.Add(ch.Address, ch.NewComment, ch.NewDisabled) })
-			if !dryRun {
-				if err := client.AddEntry(ctx, listName, ch.Address, ch.NewComment, ch.NewDisabled); err != nil {
-					return fmt.Errorf("add %s: %w", ch.Address, err)
+		g.Go(func() error {
+			switch ch.Action {
+			case ActionAdd:
+				printEntry(func() { output.Add(ch.Address, ch.NewComment, ch.NewDisabled) })
+				if !dryRun {
+					if err := client.AddEntry(gctx, listName, ch.Address, ch.NewComment, ch.NewDisabled); err != nil {
+						return fmt.Errorf("add %s: %w", ch.Address, err)
+					}
 				}
-			}
-			added++
-		case ActionDelete:
-			printEntry(func() { output.Remove(ch.Address, "") })
-			if !dryRun {
-				if err := client.DeleteEntry(ctx, ch.ID); err != nil {
-					return fmt.Errorf("delete %s: %w", ch.Address, err)
+				added.Add(1)
+			case ActionDelete:
+				printEntry(func() { output.Remove(ch.Address, "") })
+				if !dryRun {
+					if err := client.DeleteEntry(gctx, ch.ID); err != nil {
+						return fmt.Errorf("delete %s: %w", ch.Address, err)
+					}
 				}
-			}
-			removed++
-		case ActionUpdate:
-			printEntry(func() {
-				output.Update(ch.Address, ch.OldComment, ch.NewComment, ch.OldDisabled, ch.NewDisabled)
-			})
-			if !dryRun {
-				if err := client.UpdateEntry(ctx, ch.ID, ch.NewComment, ch.NewDisabled); err != nil {
-					return fmt.Errorf("update %s: %w", ch.Address, err)
+				removed.Add(1)
+			case ActionUpdate:
+				printEntry(func() {
+					output.Update(ch.Address, ch.OldComment, ch.NewComment, ch.OldDisabled, ch.NewDisabled)
+				})
+				if !dryRun {
+					if err := client.UpdateEntry(gctx, ch.ID, ch.NewComment, ch.NewDisabled); err != nil {
+						return fmt.Errorf("update %s: %w", ch.Address, err)
+					}
 				}
+				updated.Add(1)
 			}
-			updated++
-		}
+			if useProgress {
+				bar.Add(1) //nolint:errcheck
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
 		if useProgress {
-			bar.Add(1) //nolint:errcheck
+			fmt.Fprintln(os.Stderr)
 		}
+		return err
 	}
 
 	if useProgress {
 		fmt.Fprintln(os.Stderr)
 	}
 
-	output.Summary(added, removed, updated, dryRun)
+	output.Summary(int(added.Load()), int(removed.Load()), int(updated.Load()), dryRun)
 	return nil
 }
