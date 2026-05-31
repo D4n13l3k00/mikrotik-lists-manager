@@ -30,12 +30,22 @@ func NewClient(timeout time.Duration) *http.Client {
 
 // All is the ordered list of supported providers.
 var All = []Provider{
-	{Name: "Cloudflare",   Slug: "cloudflare", Fetch: fetchCloudflare},
-	{Name: "Google",       Slug: "google",     Fetch: fetchGoogle},
-	{Name: "AWS",          Slug: "aws",        Fetch: fetchAWS},
-	{Name: "Azure",        Slug: "azure",      Fetch: fetchAzure},
-	{Name: "Fastly",       Slug: "fastly",     Fetch: fetchFastly},
-	{Name: "Telegram",     Slug: "telegram",   Fetch: fetchTelegram},
+	{Name: "Cloudflare",  Slug: "cloudflare",  Fetch: fetchCloudflare},
+	{Name: "Google",      Slug: "google",      Fetch: fetchGoogle},
+	{Name: "AWS",         Slug: "aws",         Fetch: fetchAWS},
+	{Name: "Azure",       Slug: "azure",       Fetch: fetchAzure},
+	{Name: "Fastly",      Slug: "fastly",      Fetch: fetchFastly},
+	akamaiProvider,
+	digitalOceanProvider,
+	hetznerProvider,
+	ovhProvider,
+	metaProvider,
+	twitterProvider,
+	tiktokProvider,
+	discordProvider,
+	linkedinProvider,
+	{Name: "Telegram",    Slug: "telegram",    Fetch: fetchTelegram},
+	torProvider,
 	githubProvider,
 	oracleProvider,
 }
