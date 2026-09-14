@@ -386,6 +386,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--provider` | `-p` | Провайдеры: `-p cloudflare,google` или `-p cloudflare -p google` |
 | `--asn` | `-A` | Произвольный ASN через RIPE STAT: `-A AS12345` или `-A 12345,67890` |
 | `--all` | `-a` | Скачать все провайдеры без интерактивного выбора |
+| `--concurrency` | `-c` | Число параллельных загрузок (по умолчанию 6) |
 | `--format` | `-f` | Формат вывода: `native` (по умолчанию) или `mikrotik` (RSC скрипт) |
 | `--merge` | `-m` | Обновить секции в существующем файле, не перезаписывая его целиком |
 | `--timeout` | `-t` | Таймаут HTTP-запроса в секундах (по умолчанию 30) |
@@ -698,6 +699,7 @@ profiles:
 | `MT_USER` | `-u` / `--user` |
 | `MT_PASS` | `-p` / `--pass` |
 | `MT_LIST` | `-l` / `--list` |
+| `MT_PROFILE` | `-P` / `--profile` |
 
 ```bash
 export MT_HOST=192.168.1.1
