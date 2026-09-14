@@ -27,6 +27,7 @@ var (
 	reAddress   = regexp.MustCompile(`(?i)\baddress=(\S+)`)
 	reComment   = regexp.MustCompile(`(?i)\bcomment="([^"]*)"`)
 	reCommentNQ = regexp.MustCompile(`(?i)\bcomment=(\S+)`)
+	reDisabled  = regexp.MustCompile(`(?i)\bdisabled=(yes|true)`)
 )
 
 // ParseNative parses the native .list format.
@@ -130,8 +131,9 @@ func ParseMikrotik(r io.Reader) ([]Entry, error) {
 		}
 
 		entries = append(entries, Entry{
-			Address: addrMatch[1],
-			Comment: comment,
+			Address:  addrMatch[1],
+			Comment:  comment,
+			Disabled: reDisabled.MatchString(line),
 		})
 	}
 

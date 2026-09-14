@@ -2,14 +2,19 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
 )
 
+const renameProgressThreshold = 10
+
 var renameFlags connFlags
+var renameConcurrency int
 
 var renameCmd = &cobra.Command{
 	Use:   "rename <old-name> <new-name>",
@@ -27,6 +32,7 @@ func init() {
 	renameCmd.Flags().StringVarP(&renameFlags.user, "user", "u", "", "Имя пользователя API [$MT_USER]")
 	renameCmd.Flags().StringVarP(&renameFlags.pass, "pass", "p", "", "Пароль API [$MT_PASS]")
 	renameCmd.Flags().BoolVarP(&renameFlags.skipTLSVerify, "insecure", "k", false, "Не проверять TLS сертификат")
+	renameCmd.Flags().IntVarP(&renameConcurrency, "concurrency", "c", 5, "Число параллельных запросов к API (0 = последовательно)")
 }
 
 func runRename(cmd *cobra.Command, args []string) error {
@@ -52,7 +58,24 @@ func runRename(cmd *cobra.Command, args []string) error {
 
 	output.Info(fmt.Sprintf("Переименование %q → %q на %s...", oldName, newName, host))
 
-	n, err := client.RenameList(ctx, oldName, newName)
+	var bar *progressbar.ProgressBar
+	onProgress := func(done, total int) {
+		if total < renameProgressThreshold {
+			return
+		}
+		if done == 0 && bar == nil {
+			bar = newProgressBar(total, "Переименование...")
+			return
+		}
+		if bar != nil {
+			_ = bar.Add(1)
+		}
+	}
+
+	n, err := client.RenameList(ctx, oldName, newName, renameConcurrency, onProgress)
+	if bar != nil {
+		fmt.Fprintln(os.Stderr)
+	}
 	if err != nil {
 		return fmt.Errorf("переименование: %w", err)
 	}

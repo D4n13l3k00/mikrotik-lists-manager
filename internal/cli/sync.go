@@ -5,9 +5,9 @@ import (
 	"os"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
+	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
@@ -21,6 +21,7 @@ var syncVerbose bool
 var syncConcurrency int
 var syncWatch bool
 var syncWatchInterval int
+var syncForce bool
 
 var syncCmd = &cobra.Command{
 	Use:   "sync [file]",
@@ -28,13 +29,13 @@ var syncCmd = &cobra.Command{
 	Long: `Читает файл (или stdin если '-'), вычисляет diff с текущим состоянием
 address-list на MikroTik и применяет изменения.
 
-При нескольких списках один и тот же файл синхронизируется в каждый список.
+При нескольких списках один и тот же файл синхронизируется в каждый список последовательно.
 
 Примеры:
   mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes
   mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -n
   mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l list1,list2
-  mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l list1 -l list2`,
+  mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l list1 -l list2 -y`,
 	Args: cobra.ExactArgs(1),
 	RunE: runSync,
 }
@@ -51,6 +52,7 @@ func init() {
 	syncCmd.Flags().IntVarP(&syncConcurrency, "concurrency", "c", 5, "Число параллельных запросов к API (0 = последовательно)")
 	syncCmd.Flags().BoolVarP(&syncWatch, "watch", "w", false, "Следить за файлом и пересинхронизировать при изменении")
 	syncCmd.Flags().IntVar(&syncWatchInterval, "watch-interval", 3, "Интервал проверки файла в секундах (с --watch)")
+	syncCmd.Flags().BoolVarP(&syncForce, "force", "y", false, "Не запрашивать подтверждение при массовом удалении записей")
 }
 
 func runSync(cmd *cobra.Command, args []string) error {
@@ -99,31 +101,60 @@ func runSync(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		g := new(errgroup.Group)
+
 		for _, listName := range listNames {
-			g.Go(func() error {
-				output.Header(fmt.Sprintf("Синхронизация %q на %s", listName, host))
-				current, err := client.GetList(ctx, listName)
-				if err != nil {
-					return fmt.Errorf("получение списка %q: %w", listName, err)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			output.Header(fmt.Sprintf("Синхронизация %q на %s", listName, host))
+			current, err := client.GetList(ctx, listName)
+			if err != nil {
+				return fmt.Errorf("получение списка %q: %w", listName, err)
+			}
+			output.Info(fmt.Sprintf("На роутере: %d записей, в файле: %d записей", len(current), len(entries)))
+			changes, duplicates := syncer.Diff(entries, current)
+			for _, addr := range duplicates {
+				output.Warn(fmt.Sprintf("дубль в файле: %s (используется последнее вхождение)", addr))
+			}
+			if len(changes) == 0 {
+				output.Info("Уже синхронизировано.")
+				continue
+			}
+
+			deleteCount := 0
+			for _, ch := range changes {
+				if ch.Action == syncer.ActionDelete {
+					deleteCount++
 				}
-				output.Info(fmt.Sprintf("На роутере: %d записей, в файле: %d записей", len(current), len(entries)))
-				changes, duplicates := syncer.Diff(entries, current)
-				for _, addr := range duplicates {
-					output.Warn(fmt.Sprintf("дубль в файле: %s (используется последнее вхождение)", addr))
+			}
+
+			if !syncDryRun && !syncForce && deleteCount > 0 {
+				isBulkDelete := deleteCount > 50 || (len(current) > 0 && float64(deleteCount)/float64(len(current)) > 0.50)
+				if isBulkDelete {
+					if term.IsTerminal(int(os.Stdin.Fd())) {
+						var confirmed bool
+						err := huh.NewConfirm().
+							Title(fmt.Sprintf("Внимание: будет удалено %d записей из %d в списке %q. Продолжить?", deleteCount, len(current), listName)).
+							Value(&confirmed).
+							Run()
+						if err != nil || !confirmed {
+							return fmt.Errorf("синхронизация отменена пользователем")
+						}
+					} else {
+						return fmt.Errorf("безопасность: попытка массового удаления %d записей из %d в списке %q. Используйте --force (-y)", deleteCount, len(current), listName)
+					}
 				}
-				if len(changes) == 0 {
-					output.Info("Уже синхронизировано.")
-					return nil
-				}
-				output.Header("Изменения")
-				if syncDryRun {
-					output.Info("(dry run — изменения не будут применены)")
-				}
-				return syncer.Apply(ctx, client, listName, changes, syncDryRun, syncVerbose, syncConcurrency)
-			})
+			}
+
+			output.Header("Изменения")
+			if syncDryRun {
+				output.Info("(dry run — изменения не будут применены)")
+			}
+			if err := syncer.Apply(ctx, client, listName, changes, syncDryRun, syncVerbose, syncConcurrency); err != nil {
+				return err
+			}
 		}
-		return g.Wait()
+		return nil
 	}
 
 	if err := doSync(); err != nil {

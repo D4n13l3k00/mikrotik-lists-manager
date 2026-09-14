@@ -133,9 +133,15 @@ func TestDiffMixed(t *testing.T) {
 
 func TestDiffDuplicates(t *testing.T) {
 	desired := []parser.Entry{entry("8.8.8.8", "first"), entry("8.8.8.8", "second")}
-	_, dups := syncer.Diff(desired, nil)
+	changes, dups := syncer.Diff(desired, nil)
 	if len(dups) != 1 || dups[0] != "8.8.8.8" {
 		t.Errorf("expected one duplicate 8.8.8.8, got %v", dups)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("expected exactly 1 change for duplicates, got %d", len(changes))
+	}
+	if changes[0].Action != syncer.ActionAdd || changes[0].Address != "8.8.8.8" {
+		t.Errorf("unexpected change: %+v", changes[0])
 	}
 }
 

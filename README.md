@@ -44,7 +44,7 @@ cd mikrotik-lists-manager
 go build -o mikrotik-lists-manager ./cmd/main/
 ```
 
-**Требования:** RouterOS 7.x (REST API), Go 1.21+ для сборки.
+**Требования:** RouterOS 7.x (REST API), Go 1.25+ для сборки.
 
 ---
 
@@ -148,6 +148,7 @@ API-запросы выполняются параллельно (флаг `-c`,
 | `--list` | `-l` | Имя address-list, можно несколько: `-l a,b` или `-l a -l b` |
 | `--format` | `-f` | Формат файла: `auto`, `native`, `mikrotik` (по умолчанию `auto`) |
 | `--dry-run` | `-n` | Показать изменения без применения |
+| `--force` | `-y` | Пропустить подтверждение при массовом удалении (>50 записей или >50% списка) |
 | `--verbose` | `-v` | Выводить каждую запись даже при прогресс-баре |
 | `--concurrency` | `-c` | Число параллельных запросов к API (по умолчанию 5, 0 = последовательно) |
 | `--watch` | `-w` | Следить за файлом и пересинхронизировать при изменении |
@@ -161,11 +162,14 @@ API-запросы выполняются параллельно (флаг `-c`,
 # dry-run — только посмотреть diff
 ./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -n
 
-# синхронизировать в несколько списков
+# синхронизировать в несколько списков (обрабатываются последовательно)
 ./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn,blocked
 
 # из stdin
 cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-routes
+
+# без подтверждения при массовом удалении
+./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -y
 
 # следить за файлом и синхронизировать при каждом изменении
 ./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -w
@@ -175,7 +179,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 ### `list` — просмотр списков на роутере
 
-Показывает все address-list на роутере с количеством записей и сколько из них отключено.
+Показывает все address-list на роутере с количеством записей и сколько из них отключено. При выводе записей конкретного списка (`-e`) они сортируются натуральным образом по IP/CIDR.
 
 ```shell
 ./mikrotik-lists-manager list [флаги]
@@ -189,11 +193,15 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--entries` | `-e` | Показать все записи конкретного списка |
 | `--sort` | | Сортировка: `name` (по умолчанию) или `size` (по количеству записей) |
 | `--filter` | `-F` | Фильтр по имени списка (подстрока, без учёта регистра) |
+| `--json` | | Машиночитаемый вывод в формате JSON |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
 # все списки
 ./mikrotik-lists-manager list -H 192.168.1.1 -u admin
+
+# в формате JSON
+./mikrotik-lists-manager list -H 192.168.1.1 -u admin --json
 
 # по убыванию размера
 ./mikrotik-lists-manager list -H 192.168.1.1 -u admin --sort size
@@ -203,6 +211,9 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 # все записи конкретного списка
 ./mikrotik-lists-manager list -H 192.168.1.1 -u admin -e vpn-routes
+
+# записи списка в формате JSON
+./mikrotik-lists-manager list -H 192.168.1.1 -u admin -e vpn-routes --json
 ```
 
 ---
@@ -313,6 +324,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--pass` | `-p` | Пароль |
 | `--list` | `-l` | Имя address-list, можно несколько |
 | `--all` | `-a` | Применить ко всем записям списка |
+| `--concurrency` | `-c` | Число параллельных запросов к API (по умолчанию 5, 0 = последовательно) |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
@@ -460,7 +472,7 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 ### `find` — поиск адреса на роутере
 
-Ищет IP или CIDR во всех address-list на роутере. Находит точные совпадения, а также проверяет попадание IP в CIDR-записи и наоборот.
+Ищет IP или CIDR во всех address-list на роутере. Находит точные совпадения (с канонической нормализацией), а также проверяет попадание IP в CIDR-записи и вложенность подсетей (CIDR в CIDR).
 
 ```shell
 ./mikrotik-lists-manager find <address> [флаги]
@@ -471,14 +483,18 @@ Oracle поддерживает выбор регионов через `/`: `ora
 | `--host` | `-H` | Адрес роутера |
 | `--user` | `-u` | Имя пользователя API |
 | `--pass` | `-p` | Пароль |
+| `--json` | | Вывод в формате JSON |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
 # найти конкретный IP (включая попадание в CIDR-записи)
 ./mikrotik-lists-manager find 8.8.8.8 -H 192.168.1.1 -u admin
 
-# найти все записи, входящие в подсеть
+# найти все записи, входящие в подсеть или содержащие её
 ./mikrotik-lists-manager find 8.8.0.0/16 -H 192.168.1.1 -u admin
+
+# вывод в JSON
+./mikrotik-lists-manager find 1.1.1.1 -H 192.168.1.1 -u admin --json
 ```
 
 ---
@@ -512,7 +528,7 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 ### `rename` — переименование списка
 
-Переименовывает address-list на роутере, обновляя поле `list` у всех его записей через REST API.
+Переименовывает address-list на роутере, обновляя поле `list` у всех его записей через REST API параллельно с прогресс-баром.
 
 ```shell
 ./mikrotik-lists-manager rename <old-name> <new-name> [флаги]
@@ -523,6 +539,7 @@ Oracle поддерживает выбор регионов через `/`: `ora
 | `--host` | `-H` | Адрес роутера |
 | `--user` | `-u` | Имя пользователя API |
 | `--pass` | `-p` | Пароль |
+| `--concurrency` | `-c` | Число параллельных запросов к API (по умолчанию 5, 0 = последовательно) |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
@@ -533,7 +550,7 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 ### `info` — информация о роутере
 
-Подключается к роутеру и выводит информационный блок: модель, RouterOS, CPU, память, аптайм, прошивка RouterBoard.
+Подключается к роутеру и выводит информационный блок: модель, RouterOS, CPU, память, аптайм, прошивка RouterBoard. Поддерживает вывод в формате JSON.
 
 ```shell
 ./mikrotik-lists-manager info [флаги]
@@ -544,10 +561,14 @@ Oracle поддерживает выбор регионов через `/`: `ora
 | `--host` | `-H` | Адрес роутера |
 | `--user` | `-u` | Имя пользователя API |
 | `--pass` | `-p` | Пароль |
+| `--json` | | Вывод в формате JSON |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
 ./mikrotik-lists-manager info -H 192.168.1.1 -u admin
+
+# вывод в JSON
+./mikrotik-lists-manager info -H 192.168.1.1 -u admin --json
 ```
 
 ---
@@ -577,39 +598,81 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 #### `config init`
 
-Создаёт шаблон конфига `.mikrotik-lists-manager.yaml` в текущей директории.
+Создаёт шаблон конфигурационного файла. По умолчанию создаёт `.mikrotik-lists-manager.yaml` в текущей директории. С флагом `-g` (`--global`) создаёт конфиг в глобальной директории пользователя.
 
 ```bash
+# в текущей директории
 ./mikrotik-lists-manager config init
 
-# указать другой путь
+# в глобальной пользовательской директории (~/.config/mikrotik-lists-manager/config.yaml или %APPDATA%)
+./mikrotik-lists-manager config init -g
+
+# по произвольному пути
 ./mikrotik-lists-manager config init --config /etc/vpn/config.yaml
 ```
 
 #### `config show`
 
-Показывает итоговую конфигурацию с учётом файла и переменных окружения. Пароль маскируется.
+Показывает итоговую конфигурацию с учётом файла, активного профиля и переменных окружения. Пароль маскируется.
 
 ```bash
 ./mikrotik-lists-manager config show
+
+# показать параметры конкретного профиля
+./mikrotik-lists-manager config show -P office
 ```
 
 ---
 
 ## ⚙️ Конфигурационный файл
 
-Утилита ищет `.mikrotik-lists-manager.yaml` в текущей директории. Путь можно переопределить флагом `--config`.
+### Автопоиск конфига
 
-Приоритет для каждого параметра: **флаг > переменная окружения > конфиг файл**.
+Если путь к конфигу не передан явно через `--config`, утилита ищет его по следующей цепочке:
+1. Текущая директория: `./.mikrotik-lists-manager.yaml`
+2. Глобальная директория пользователя: `~/.config/mikrotik-lists-manager/config.yaml` (Linux/macOS) или `%APPDATA%\mikrotik-lists-manager\config.yaml` (Windows)
+3. Домашняя директория пользователя: `~/.mikrotik-lists-manager.yaml`
+
+Приоритет для каждого параметра: **CLI флаг > переменная окружения > выбранный профиль > глобальные настройки конфига > значения по умолчанию**.
+
+### Профили роутеров (Profiles)
+
+Конфиг поддерживает несколько профилей роутеров (например, домашний и офисный роутер). Для переключения используется флаг `-P` (`--profile`) или переменная окружения `MT_PROFILE`.
 
 ```yaml
 # .mikrotik-lists-manager.yaml
-host: "192.168.1.1"
+
+# Профиль по умолчанию (если не указан -P)
+default_profile: "home"
+
+# Глобальные настройки (fallback для параметров, не заданных в профиле)
 user: "admin"
-pass: ""            # лучше оставить пустым — спросит при запуске
-list: "vpn-routes"
+pass: ""            # лучше оставить пустым — спросит интерактивно
 insecure: false
 default_format: auto
+
+# Профили роутеров
+profiles:
+  home:
+    host: "192.168.1.1"
+    user: "admin"
+    list: "vpn-routes"
+  office:
+    host: "10.10.0.1:8443"
+    user: "network-admin"
+    list: "office-vpn"
+    insecure: true
+```
+
+Использование профилей:
+
+```bash
+# использовать профиль по умолчанию (home)
+./mikrotik-lists-manager list
+
+# использовать профиль office
+./mikrotik-lists-manager list -P office
+./mikrotik-lists-manager sync vpn.list -P office
 ```
 
 После создания конфига команды становятся короче:

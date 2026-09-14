@@ -10,7 +10,12 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
+
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/version"
 )
 
 // AddressListEntry is a single record from MikroTik REST API.
@@ -97,6 +102,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader) (*
 			req.Header.Set("Content-Type", "application/json")
 		}
 		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", version.UserAgent())
 		resp, err = c.httpClient.Do(req)
 		if err != nil {
 			continue
@@ -260,9 +266,20 @@ type routerBoard struct {
 	UpgradeFirmware string `json:"upgrade-firmware"`
 }
 
-// RenameList renames an address-list by patching the list field of every entry.
+// RenameEntry updates the list field for a single entry by ID.
+func (c *Client) RenameEntry(ctx context.Context, id, newName string) error {
+	b, _ := json.Marshal(map[string]any{"list": newName})
+	resp, err := c.do(ctx, "PATCH", "/rest/ip/firewall/address-list/"+id, strings.NewReader(string(b)))
+	if err != nil {
+		return fmt.Errorf("rename %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+	return checkStatus(resp)
+}
+
+// RenameList renames an address-list by patching the list field of every entry in parallel.
 // Returns the number of entries updated.
-func (c *Client) RenameList(ctx context.Context, oldName, newName string) (int, error) {
+func (c *Client) RenameList(ctx context.Context, oldName, newName string, concurrency int, onProgress func(done, total int)) (int, error) {
 	entries, err := c.GetList(ctx, oldName)
 	if err != nil {
 		return 0, err
@@ -270,18 +287,42 @@ func (c *Client) RenameList(ctx context.Context, oldName, newName string) (int, 
 	if len(entries) == 0 {
 		return 0, fmt.Errorf("список %q не найден или пуст", oldName)
 	}
-	for _, e := range entries {
-		b, _ := json.Marshal(map[string]any{"list": newName})
-		resp, err := c.do(ctx, "PATCH", "/rest/ip/firewall/address-list/"+e.ID, strings.NewReader(string(b)))
-		if err != nil {
-			return 0, fmt.Errorf("rename %s: %w", e.Address, err)
-		}
-		resp.Body.Close()
-		if err := checkStatus(resp); err != nil {
-			return 0, err
-		}
+
+	total := len(entries)
+	if onProgress != nil {
+		onProgress(0, total)
 	}
-	return len(entries), nil
+
+	limit := concurrency
+	if limit <= 0 {
+		limit = 1
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(limit)
+
+	var done atomic.Int64
+	for _, e := range entries {
+		if gctx.Err() != nil {
+			break
+		}
+		entry := e
+		g.Go(func() error {
+			if err := c.RenameEntry(gctx, entry.ID, newName); err != nil {
+				return fmt.Errorf("rename %s: %w", entry.Address, err)
+			}
+			d := int(done.Add(1))
+			if onProgress != nil {
+				onProgress(d, total)
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return int(done.Load()), err
+	}
+	return total, nil
 }
 
 // GetRouterInfo fetches system resource and routerboard info concurrently.

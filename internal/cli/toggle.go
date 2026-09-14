@@ -3,15 +3,24 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"sync"
+	"sync/atomic"
 
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/parser"
 )
+
+const toggleProgressThreshold = 10
 
 var disableFlags connFlags
 var disableAll bool
+var disableConcurrency int
 
 var disableCmd = &cobra.Command{
 	Use:   "disable [адрес...]",
@@ -23,12 +32,13 @@ var disableCmd = &cobra.Command{
   mikrotik-lists-manager disable 8.8.8.8 1.1.1.1 -H 192.168.1.1 -u admin -l VPN_LIST
   mikrotik-lists-manager disable --all -H 192.168.1.1 -u admin -l list1,list2`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSetDisabled(cmd.Context(), args, disableFlags, disableAll, true)
+		return runSetDisabled(cmd.Context(), args, disableFlags, disableAll, true, disableConcurrency)
 	},
 }
 
 var enableFlags connFlags
 var enableAll bool
+var enableConcurrency int
 
 var enableCmd = &cobra.Command{
 	Use:   "enable [адрес...]",
@@ -40,7 +50,7 @@ var enableCmd = &cobra.Command{
   mikrotik-lists-manager enable 8.8.8.8 1.1.1.1 -H 192.168.1.1 -u admin -l VPN_LIST
   mikrotik-lists-manager enable --all -H 192.168.1.1 -u admin -l list1,list2`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runSetDisabled(cmd.Context(), args, enableFlags, enableAll, false)
+		return runSetDisabled(cmd.Context(), args, enableFlags, enableAll, false, enableConcurrency)
 	},
 }
 
@@ -48,10 +58,11 @@ func init() {
 	for _, cmd := range []*cobra.Command{disableCmd, enableCmd} {
 		var f *connFlags
 		var all *bool
+		var concurrency *int
 		if cmd == disableCmd {
-			f, all = &disableFlags, &disableAll
+			f, all, concurrency = &disableFlags, &disableAll, &disableConcurrency
 		} else {
-			f, all = &enableFlags, &enableAll
+			f, all, concurrency = &enableFlags, &enableAll, &enableConcurrency
 		}
 		cmd.Flags().StringVarP(&f.host, "host", "H", "", "Адрес MikroTik [$MT_HOST]")
 		cmd.Flags().StringVarP(&f.user, "user", "u", "", "Имя пользователя API [$MT_USER]")
@@ -59,10 +70,11 @@ func init() {
 		cmd.Flags().StringArrayVarP(&f.listNames, "list", "l", nil, "Имя address-list, можно несколько [$MT_LIST]")
 		cmd.Flags().BoolVarP(&f.skipTLSVerify, "insecure", "k", false, "Не проверять TLS сертификат")
 		cmd.Flags().BoolVarP(all, "all", "a", false, "Применить ко всему списку")
+		cmd.Flags().IntVarP(concurrency, "concurrency", "c", 5, "Число параллельных запросов к API (0 = последовательно)")
 	}
 }
 
-func runSetDisabled(ctx context.Context, args []string, flags connFlags, all, disabled bool) error {
+func runSetDisabled(ctx context.Context, args []string, flags connFlags, all, disabled bool, concurrency int) error {
 	if !all && len(args) == 0 {
 		return fmt.Errorf("укажите адреса или используйте --all")
 	}
@@ -92,7 +104,7 @@ func runSetDisabled(ctx context.Context, args []string, flags connFlags, all, di
 	targets := map[string]bool{}
 	if !all {
 		for _, a := range args {
-			targets[a] = true
+			targets[parser.NormalizeAddr(a)] = true
 		}
 	}
 
@@ -102,54 +114,111 @@ func runSetDisabled(ctx context.Context, args []string, flags connFlags, all, di
 	}
 
 	for _, listName := range listNames {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		entries, err := client.GetList(ctx, listName)
 		if err != nil {
 			return fmt.Errorf("получение списка %q: %w", listName, err)
 		}
 
+		listTargets := targets
 		if all {
-			targets = map[string]bool{}
+			listTargets = map[string]bool{}
 			for _, e := range entries {
-				targets[e.Address] = true
+				listTargets[parser.NormalizeAddr(e.Address)] = true
 			}
 		}
 
 		output.Header(fmt.Sprintf("%s записей в %q", action, listName))
 
-		count := 0
+		var toChange []mikrotik.AddressListEntry
 		for _, e := range entries {
-			if !targets[e.Address] {
-				continue
-			}
-			if e.Disabled.Bool() == disabled {
-				continue
-			}
-			if disabled {
-				output.Disable(e.Address, e.Comment)
-			} else {
-				output.Enable(e.Address, e.Comment)
-			}
-			if err := client.SetDisabled(ctx, e.ID, disabled); err != nil {
-				return err
-			}
-			count++
-		}
-
-		entrySet := map[string]bool{}
-		for _, e := range entries {
-			entrySet[e.Address] = true
-		}
-		for addr := range targets {
-			if !entrySet[addr] {
-				output.Warn(fmt.Sprintf("%s не найден в списке %q", addr, listName))
+			key := parser.NormalizeAddr(e.Address)
+			if listTargets[key] && e.Disabled.Bool() != disabled {
+				toChange = append(toChange, e)
 			}
 		}
 
-		if count == 0 {
+		if len(toChange) == 0 {
 			output.Info("Все записи уже в нужном состоянии.")
-		} else {
-			output.Info(fmt.Sprintf("Готово. Изменено %d записей.", count))
+			checkMissingTargets(entries, listTargets, listName, args, all)
+			continue
 		}
+
+		useProgress := len(toChange) >= toggleProgressThreshold
+		var bar *progressbar.ProgressBar
+		if useProgress {
+			bar = newProgressBar(len(toChange), action+"...")
+		}
+
+		limit := concurrency
+		if limit <= 0 {
+			limit = 1
+		}
+
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(limit)
+
+		var mu sync.Mutex
+		var modified atomic.Int64
+
+		for _, e := range toChange {
+			if gctx.Err() != nil {
+				break
+			}
+			entry := e
+			g.Go(func() error {
+				if !useProgress {
+					mu.Lock()
+					if disabled {
+						output.Disable(entry.Address, entry.Comment)
+					} else {
+						output.Enable(entry.Address, entry.Comment)
+					}
+					mu.Unlock()
+				}
+
+				if err := client.SetDisabled(gctx, entry.ID, disabled); err != nil {
+					return fmt.Errorf("%s %s: %w", action, entry.Address, err)
+				}
+
+				modified.Add(1)
+				if useProgress {
+					_ = bar.Add(1)
+				}
+				return nil
+			})
+		}
+
+		if err := g.Wait(); err != nil {
+			if useProgress {
+				fmt.Fprintln(os.Stderr)
+			}
+			return err
+		}
+		if useProgress {
+			fmt.Fprintln(os.Stderr)
+		}
+
+		checkMissingTargets(entries, listTargets, listName, args, all)
+		output.Info(fmt.Sprintf("Готово. Изменено %d записей.", modified.Load()))
 	}
 	return nil
+}
+
+func checkMissingTargets(entries []mikrotik.AddressListEntry, targets map[string]bool, listName string, args []string, all bool) {
+	if all {
+		return
+	}
+	entrySet := map[string]bool{}
+	for _, e := range entries {
+		entrySet[parser.NormalizeAddr(e.Address)] = true
+	}
+	for _, raw := range args {
+		if !entrySet[parser.NormalizeAddr(raw)] {
+			output.Warn(fmt.Sprintf("%s не найден в списке %q", raw, listName))
+		}
+	}
 }

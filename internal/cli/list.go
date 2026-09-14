@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"sort"
 	"strings"
 
@@ -16,6 +17,7 @@ var listFlags connFlags
 var listEntries string
 var listSort string
 var listFilter string
+var listJSON bool
 
 var listCmd = &cobra.Command{
 	Use:   "list",
@@ -25,7 +27,9 @@ var listCmd = &cobra.Command{
 
 Примеры:
   mikrotik-lists-manager list -H 192.168.1.1 -u admin
-  mikrotik-lists-manager list -H 192.168.1.1 -u admin -e vpn-routes`,
+  mikrotik-lists-manager list -H 192.168.1.1 -u admin -e vpn-routes
+  mikrotik-lists-manager list --json
+  mikrotik-lists-manager list -e vpn-routes --json`,
 	RunE: runList,
 }
 
@@ -37,6 +41,43 @@ func init() {
 	listCmd.Flags().StringVarP(&listEntries, "entries", "e", "", "Показать все записи указанного списка")
 	listCmd.Flags().StringVar(&listSort, "sort", "name", "Сортировка: name (по имени) или size (по количеству записей)")
 	listCmd.Flags().StringVarP(&listFilter, "filter", "F", "", "Фильтр по имени списка (подстрока, без учёта регистра)")
+	listCmd.Flags().BoolVar(&listJSON, "json", false, "Вывод в формате JSON")
+}
+
+func parseAsPrefix(s string) (netip.Prefix, bool) {
+	if p, err := netip.ParsePrefix(s); err == nil {
+		return p, true
+	}
+	if ip, err := netip.ParseAddr(s); err == nil {
+		return netip.PrefixFrom(ip, ip.BitLen()), true
+	}
+	return netip.Prefix{}, false
+}
+
+func compareAddresses(a, b string) bool {
+	pa, aOk := parseAsPrefix(a)
+	pb, bOk := parseAsPrefix(b)
+
+	if aOk && bOk {
+		if pa.Addr().Is4() && pb.Addr().Is6() {
+			return true
+		}
+		if pa.Addr().Is6() && pb.Addr().Is4() {
+			return false
+		}
+		cmp := pa.Addr().Compare(pb.Addr())
+		if cmp != 0 {
+			return cmp < 0
+		}
+		return pa.Bits() < pb.Bits()
+	}
+	if aOk && !bOk {
+		return true
+	}
+	if !aOk && bOk {
+		return false
+	}
+	return a < b
 }
 
 func runList(cmd *cobra.Command, args []string) error {
@@ -83,11 +124,6 @@ func runList(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if len(stats) == 0 {
-		output.Info("Списков не найдено.")
-		return nil
-	}
-
 	names := make([]string, 0, len(stats))
 	for n := range stats {
 		if listFilter == "" || strings.Contains(strings.ToLower(n), strings.ToLower(listFilter)) {
@@ -102,6 +138,24 @@ func runList(cmd *cobra.Command, args []string) error {
 		})
 	default:
 		sort.Strings(names)
+	}
+
+	if listJSON {
+		dtos := make([]output.ListSummaryDTO, 0, len(names))
+		for _, name := range names {
+			s := stats[name]
+			dtos = append(dtos, output.ListSummaryDTO{
+				Name:     name,
+				Total:    s.total,
+				Disabled: s.disabled,
+			})
+		}
+		return output.JSON(dtos)
+	}
+
+	if len(names) == 0 {
+		output.Info("Списков не найдено.")
+		return nil
 	}
 
 	output.Header(fmt.Sprintf("Address-lists на %s", host))
@@ -120,14 +174,26 @@ func runListEntries(ctx context.Context, client *mikrotik.Client, host, listName
 		return fmt.Errorf("получение списка %q: %w", listName, err)
 	}
 
+	sort.Slice(entries, func(i, j int) bool {
+		return compareAddresses(entries[i].Address, entries[j].Address)
+	})
+
+	if listJSON {
+		dtos := make([]output.EntryDTO, 0, len(entries))
+		for _, e := range entries {
+			dtos = append(dtos, output.EntryDTO{
+				Address:  e.Address,
+				Comment:  e.Comment,
+				Disabled: e.Disabled.Bool(),
+			})
+		}
+		return output.JSON(dtos)
+	}
+
 	if len(entries) == 0 {
 		output.Info(fmt.Sprintf("Список %q пуст.", listName))
 		return nil
 	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Address < entries[j].Address
-	})
 
 	output.Header(fmt.Sprintf("%q на %s  (%d записей)", listName, host, len(entries)))
 	disabled := 0

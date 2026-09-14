@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/version"
 )
 
 // Provider describes a single IP-range source.
@@ -23,9 +25,28 @@ func (p Provider) HasSubs() bool {
 // HTTPClient is an alias for http.Client used in function signatures.
 type HTTPClient = http.Client
 
-// NewClient returns an http.Client with the given timeout.
+type userAgentTransport struct {
+	base http.RoundTripper
+	ua   string
+}
+
+func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r := req.Clone(req.Context())
+	if r.Header.Get("User-Agent") == "" {
+		r.Header.Set("User-Agent", t.ua)
+	}
+	return t.base.RoundTrip(r)
+}
+
+// NewClient returns an http.Client with the given timeout and standard User-Agent.
 func NewClient(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &userAgentTransport{
+			base: http.DefaultTransport,
+			ua:   version.UserAgent(),
+		},
+	}
 }
 
 // All is the ordered list of supported providers.

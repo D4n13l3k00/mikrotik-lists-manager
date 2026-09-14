@@ -40,6 +40,11 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("чтение файла: %w", err)
 	}
 
+	if !optimizeWrite {
+		output.SetWriter(os.Stderr)
+		defer output.ResetWriter()
+	}
+
 	result, err := optimizer.Optimize(string(content))
 	if err != nil {
 		return fmt.Errorf("оптимизация: %w", err)
@@ -50,6 +55,9 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 
 	if unchanged {
 		output.Info("Список уже оптимален, изменений нет.")
+		if !optimizeWrite {
+			fmt.Print(optimized)
+		}
 		return nil
 	}
 
@@ -74,7 +82,6 @@ func runOptimize(cmd *cobra.Command, args []string) error {
 		}
 		output.Info(fmt.Sprintf("Файл %s обновлён.", filePath))
 	} else {
-		fmt.Println()
 		fmt.Print(optimized)
 	}
 	return nil

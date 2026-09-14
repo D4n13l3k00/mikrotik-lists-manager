@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/config"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/version"
 )
 
 type connFlags struct {
@@ -27,6 +30,9 @@ type connFlags struct {
 }
 
 var configFile string
+var profileFlag string
+var resolvedConfigFile string
+var configGlobal bool
 var loadedConfig config.Config
 
 // ── help styles ──────────────────────────────────────────────────────────────
@@ -137,26 +143,53 @@ var rootCmd = &cobra.Command{
 		if cmd.Parent() != nil && cmd.Parent().Name() == "config" {
 			return nil
 		}
-		cfg, err := config.Load(configFile)
+		resolvedPath, _, err := config.FindConfigFile(configFile)
 		if err != nil {
 			return err
 		}
-		loadedConfig = cfg
+		resolvedConfigFile = resolvedPath
+		cfg, err := config.Load(resolvedPath)
+		if err != nil {
+			return err
+		}
+		activeProfile := profileFlag
+		if activeProfile == "" {
+			activeProfile = os.Getenv("MT_PROFILE")
+		}
+		prof, err := cfg.EffectiveProfile(activeProfile)
+		if err != nil {
+			return err
+		}
+		loadedConfig = config.Config{
+			Host:          prof.Host,
+			User:          prof.User,
+			Pass:          prof.Pass,
+			List:          prof.List,
+			SkipTLSVerify: prof.Insecure(false),
+			DefaultFormat: prof.DefaultFormat,
+		}
 		return nil
 	},
 }
 
-func Execute(version, commit string) {
+func Execute(v, commit string) {
+	if v != "" {
+		version.Version = v
+	}
+	if commit != "" {
+		version.Commit = commit
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	rootCmd.Version = version + " (" + commit + ")"
+	rootCmd.Version = v + " (" + commit + ")"
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		os.Exit(1)
 	}
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&configFile, "config", config.DefaultConfigFile, "Путь к конфиг файлу")
+	rootCmd.PersistentFlags().StringVar(&configFile, "config", "", "Путь к конфиг файлу (по умолчанию: автопоиск)")
+	rootCmd.PersistentFlags().StringVarP(&profileFlag, "profile", "P", "", "Имя профиля роутера из конфига [$MT_PROFILE]")
 	rootCmd.AddCommand(syncCmd)
 	rootCmd.AddCommand(appendCmd)
 	rootCmd.AddCommand(removeCmd)
@@ -262,59 +295,110 @@ var configCmd = &cobra.Command{
 
 var configInitCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Создать шаблон конфига в текущей директории",
+	Short: "Создать шаблон конфига в текущей директории или глобально (--global)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if _, err := os.Stat(configFile); err == nil {
-			return fmt.Errorf("%s уже существует — удалите его или укажите другой путь через --config", configFile)
+		targetPath := configFile
+		if configGlobal {
+			globalPath, err := config.DefaultGlobalConfigPath()
+			if err != nil {
+				return err
+			}
+			targetPath = globalPath
+		} else if targetPath == "" {
+			targetPath = config.DefaultConfigFile
 		}
-		if err := os.WriteFile(configFile, []byte(config.Template()), 0o600); err != nil {
+
+		if _, err := os.Stat(targetPath); err == nil {
+			return fmt.Errorf("%s уже существует — удалите его или укажите другой путь", targetPath)
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return fmt.Errorf("создание директории конфига: %w", err)
+		}
+		if err := os.WriteFile(targetPath, []byte(config.Template()), 0o600); err != nil {
 			return fmt.Errorf("запись конфига: %w", err)
 		}
-		output.Info(fmt.Sprintf("Создан %s", configFile))
+		output.Info(fmt.Sprintf("Создан %s", targetPath))
 		return nil
 	},
 }
 
 var configShowCmd = &cobra.Command{
 	Use:   "show",
-	Short: "Показать активную конфигурацию (файл + env)",
+	Short: "Показать активную конфигурацию (файл + профиль + env)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load(configFile)
+		resolvedPath, found, err := config.FindConfigFile(configFile)
 		if err != nil {
 			return err
 		}
+		cfg, err := config.Load(resolvedPath)
+		if err != nil {
+			return err
+		}
+		activeProfile := profileFlag
+		if activeProfile == "" {
+			activeProfile = os.Getenv("MT_PROFILE")
+		}
+		prof, err := cfg.EffectiveProfile(activeProfile)
+		if err != nil {
+			return err
+		}
+
+		host := prof.Host
 		if v := os.Getenv("MT_HOST"); v != "" {
-			cfg.Host = v
+			host = v
 		}
+		user := prof.User
 		if v := os.Getenv("MT_USER"); v != "" {
-			cfg.User = v
+			user = v
 		}
+		pass := prof.Pass
 		passHint := ""
 		if os.Getenv("MT_PASS") != "" {
-			cfg.Pass = "***"
+			pass = "***"
 			passHint = "из env"
-		} else if cfg.Pass != "" {
-			cfg.Pass = "***"
+		} else if pass != "" {
+			pass = "***"
 			passHint = "из конфига"
 		}
+		list := prof.List
 		if v := os.Getenv("MT_LIST"); v != "" {
-			cfg.List = v
+			list = v
 		}
 
 		output.Header("Конфигурация")
-		output.KV("config", configFile, "")
-		output.KV("host", orEmpty(cfg.Host), "")
-		output.KV("user", orEmpty(cfg.User), "")
-		output.KV("pass", orEmpty(cfg.Pass), passHint)
-		output.KV("list", orEmpty(cfg.List), "")
-		output.KV("insecure", fmt.Sprintf("%v", cfg.SkipTLSVerify), "")
-		output.KV("format", orDefault(cfg.DefaultFormat, "auto"), "")
+		if found {
+			output.KV("config", resolvedPath, "")
+		} else {
+			output.KV("config", "(файл не найден, используются значения по умолчанию и env)", "")
+		}
+		if activeProfile != "" {
+			output.KV("profile", activeProfile, "")
+		} else if cfg.DefaultProfile != "" {
+			output.KV("profile", fmt.Sprintf("%s (по умолчанию)", cfg.DefaultProfile), "")
+		} else {
+			output.KV("profile", "(не выбран)", "")
+		}
+		if len(cfg.Profiles) > 0 {
+			var profNames []string
+			for k := range cfg.Profiles {
+				profNames = append(profNames, k)
+			}
+			sort.Strings(profNames)
+			output.KV("available_profiles", strings.Join(profNames, ", "), "")
+		}
+		output.KV("host", orEmpty(host), "")
+		output.KV("user", orEmpty(user), "")
+		output.KV("pass", orEmpty(pass), passHint)
+		output.KV("list", orEmpty(list), "")
+		output.KV("insecure", fmt.Sprintf("%v", prof.Insecure(false)), "")
+		output.KV("format", orDefault(prof.DefaultFormat, "auto"), "")
 		fmt.Println()
 		return nil
 	},
 }
 
 func init() {
+	configInitCmd.Flags().BoolVarP(&configGlobal, "global", "g", false, "Создать конфиг в глобальной директории пользователя")
 	configCmd.AddCommand(configInitCmd)
 	configCmd.AddCommand(configShowCmd)
 }

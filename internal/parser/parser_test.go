@@ -132,6 +132,30 @@ add list=vpn address=1.1.1.1
 	}
 }
 
+func TestParseMikrotikDisabled(t *testing.T) {
+	input := `/ip firewall address-list
+add list=vpn address=8.8.8.8 comment="Google DNS" disabled=yes
+add list=vpn address=1.1.1.1 disabled=true
+add list=vpn address=1.0.0.1
+`
+	entries, err := parser.ParseMikrotik(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
+	}
+	if !entries[0].Disabled {
+		t.Errorf("entry 0 should be disabled")
+	}
+	if !entries[1].Disabled {
+		t.Errorf("entry 1 should be disabled")
+	}
+	if entries[2].Disabled {
+		t.Errorf("entry 2 should not be disabled")
+	}
+}
+
 func TestParseMikrotikBareAdd(t *testing.T) {
 	// without the /ip header line
 	input := `add list=x address=192.168.1.0/24 comment="LAN"

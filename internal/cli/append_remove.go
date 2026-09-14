@@ -95,12 +95,15 @@ func runAppend(cmd *cobra.Command, args []string) error {
 
 		existing := make(map[string]bool, len(current))
 		for _, e := range current {
-			existing[strings.ToLower(e.Address)] = true
+			existing[parser.NormalizeAddr(e.Address)] = true
 		}
 
+		seenToAdd := make(map[string]bool)
 		var toAdd []parser.Entry
 		for _, e := range entries {
-			if !existing[strings.ToLower(e.Address)] {
+			key := parser.NormalizeAddr(e.Address)
+			if !existing[key] && !seenToAdd[key] {
+				seenToAdd[key] = true
 				toAdd = append(toAdd, e)
 			}
 		}
@@ -240,8 +243,11 @@ func runRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	toRemove := make(map[string]bool, len(entries))
+	notFoundOrig := make(map[string]string, len(entries))
 	for _, e := range entries {
-		toRemove[strings.ToLower(e.Address)] = true
+		key := parser.NormalizeAddr(e.Address)
+		toRemove[key] = true
+		notFoundOrig[key] = e.Address
 	}
 
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(removeFlags.skipTLSVerify))
@@ -261,21 +267,22 @@ func runRemove(cmd *cobra.Command, args []string) error {
 			output.Info("(dry run — изменения не будут применены)")
 		}
 
-		notFoundSet := make(map[string]bool, len(toRemove))
-		for k := range toRemove {
-			notFoundSet[k] = true
+		notFoundSet := make(map[string]string, len(notFoundOrig))
+		for k, v := range notFoundOrig {
+			notFoundSet[k] = v
 		}
 
 		var toDelete []mikrotik.AddressListEntry
 		for _, e := range current {
-			if toRemove[strings.ToLower(e.Address)] {
+			key := parser.NormalizeAddr(e.Address)
+			if toRemove[key] {
 				toDelete = append(toDelete, e)
-				delete(notFoundSet, strings.ToLower(e.Address))
+				delete(notFoundSet, key)
 			}
 		}
 
-		for addr := range notFoundSet {
-			output.Warn(fmt.Sprintf("%s не найден в списке на роутере", addr))
+		for _, origAddr := range notFoundSet {
+			output.Warn(fmt.Sprintf("%s не найден в списке на роутере", origAddr))
 		}
 
 		if len(toDelete) == 0 {

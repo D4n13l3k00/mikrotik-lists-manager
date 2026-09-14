@@ -24,6 +24,7 @@ var fetchTimeout int
 var fetchAll bool
 var fetchOutFormat string
 var fetchMerge bool
+var fetchConcurrency int
 
 var (
 	fetchStylePending = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
@@ -75,6 +76,7 @@ func init() {
 	fetchCmd.Flags().IntVarP(&fetchTimeout, "timeout", "t", 30, "Таймаут HTTP-запроса в секундах")
 	fetchCmd.Flags().StringVarP(&fetchOutFormat, "format", "f", "native", "Формат вывода: native или mikrotik (.rsc)")
 	fetchCmd.Flags().BoolVarP(&fetchMerge, "merge", "m", false, "Добавить результаты в существующий файл (только для native)")
+	fetchCmd.Flags().IntVarP(&fetchConcurrency, "concurrency", "c", 6, "Число параллельных загрузок провайдеров")
 	_ = fetchCmd.MarkFlagRequired("output")
 }
 
@@ -109,6 +111,11 @@ func runFetch(cmd *cobra.Command, args []string) error {
 
 	var mu sync.Mutex
 	g, _ := errgroup.WithContext(cmd.Context())
+	limit := fetchConcurrency
+	if limit <= 0 {
+		limit = 6
+	}
+	g.SetLimit(limit)
 	for i, p := range providers {
 		g.Go(func() error {
 			cidrs, fetchErr := p.Fetch(client)

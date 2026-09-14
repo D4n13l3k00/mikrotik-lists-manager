@@ -1,0 +1,40 @@
+﻿name: CI
+
+on:
+  push:
+    branches: [ master, dev, main ]
+  pull_request:
+    branches: [ master, dev, main ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test & Lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Run Tests
+        if: runner.os != 'Linux'
+        run: go test -v ./...
+
+      - name: Run Tests with Race Detector
+        if: runner.os == 'Linux'
+        run: go test -v -race ./...
+
+      - name: Build Binary
+        run: go build -v ./cmd/main

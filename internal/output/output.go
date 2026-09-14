@@ -2,13 +2,49 @@
 package output
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+var (
+	writerMu      sync.Mutex
+	defaultWriter io.Writer = os.Stdout
+)
+
+// SetWriter redirects standard output messages (Header, Info, Warn, Add, Remove, etc.).
+func SetWriter(w io.Writer) {
+	writerMu.Lock()
+	defer writerMu.Unlock()
+	defaultWriter = w
+}
+
+// ResetWriter restores standard output messages back to os.Stdout.
+func ResetWriter() {
+	SetWriter(os.Stdout)
+}
+
+func println(a ...any) {
+	writerMu.Lock()
+	defer writerMu.Unlock()
+	fmt.Fprintln(defaultWriter, a...)
+}
+
+// JSON encodes and prints data in formatted JSON to defaultWriter.
+func JSON(data any) error {
+	writerMu.Lock()
+	defer writerMu.Unlock()
+	enc := json.NewEncoder(defaultWriter)
+	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
+	return enc.Encode(data)
+}
 
 var (
 	green  = lipgloss.Color("10")
@@ -84,7 +120,7 @@ func Add(address, comment string, disabled bool) {
 	if comment != "" {
 		line += "  " + styleComment.Render("# "+comment)
 	}
-	fmt.Println(line)
+	println(line)
 }
 
 // Normalize prints a "/32 → bare IP" conversion line.
@@ -95,7 +131,7 @@ func Normalize(from, to string) {
 		styleOld.Render(from),
 		styleArrow.Render(" → ")+styleNew.Render(to),
 	)
-	fmt.Println(line)
+	println(line)
 }
 
 func Remove(address, comment string) {
@@ -105,7 +141,7 @@ func Remove(address, comment string) {
 	if comment != "" {
 		line += "  " + styleComment.Render("# "+comment)
 	}
-	fmt.Println(line)
+	println(line)
 }
 
 func Update(address, oldComment, newComment string, oldDisabled, newDisabled bool) {
@@ -128,7 +164,7 @@ func Update(address, oldComment, newComment string, oldDisabled, newDisabled boo
 			styleArrow.Render(" → ") +
 			styleNew.Render(newComment)
 	}
-	fmt.Println(line)
+	println(line)
 }
 
 // Disable prints a "disabled" action line (for enable/disable commands).
@@ -139,7 +175,7 @@ func Disable(address, comment string) {
 	if comment != "" {
 		line += "  " + styleComment.Render("# "+comment)
 	}
-	fmt.Println(line)
+	println(line)
 }
 
 // Enable prints an "enabled" action line.
@@ -150,20 +186,20 @@ func Enable(address, comment string) {
 	if comment != "" {
 		line += "  " + styleComment.Render("# "+comment)
 	}
-	fmt.Println(line)
+	println(line)
 }
 
 func Header(msg string) {
-	fmt.Println()
-	fmt.Println(styleHeader.Render(msg))
+	println()
+	println(styleHeader.Render(msg))
 }
 
 func Info(msg string) {
-	fmt.Println(styleInfo.Render("  " + msg))
+	println(styleInfo.Render("  " + msg))
 }
 
 func Warn(msg string) {
-	fmt.Println(styleWarn.Render("  ⚠  " + msg))
+	println(styleWarn.Render("  ⚠  " + msg))
 }
 
 func Error(msg string) {
@@ -178,14 +214,14 @@ func KV(key, value, hint string) {
 	if hint != "" {
 		line += "  " + styleDim.Render(hint)
 	}
-	fmt.Println(line)
+	println(line)
 }
 
 // Summary prints a final result box.
 func Summary(added, removed, updated int, dryRun bool) {
-	fmt.Println()
+	println()
 	if added+removed+updated == 0 {
-		fmt.Println(styleSummaryOk.Render("  ✓  уже синхронизировано  "))
+		println(styleSummaryOk.Render("  ✓  уже синхронизировано  "))
 		return
 	}
 
@@ -203,14 +239,12 @@ func Summary(added, removed, updated int, dryRun bool) {
 	msg := strings.Join(parts, styleDim.Render("  ·  "))
 	if dryRun {
 		msg += styleDim.Render("  (dry run)")
-		fmt.Println(styleSummaryDry.Render("  " + msg + "  "))
+		println(styleSummaryDry.Render("  " + msg + "  "))
 	} else {
-		fmt.Println(styleSummaryOk.Render("  " + msg + "  "))
+		println(styleSummaryOk.Render("  " + msg + "  "))
 	}
 }
 
-// RouterBanner prints a styled box with router identity shown at command start.
-// firmware may be empty for CHR/x86 devices.
 // RouterBannerInfo is the display data for RouterBanner.
 type RouterBannerInfo struct {
 	Host            string
@@ -311,9 +345,9 @@ func RouterBanner(r RouterBannerInfo) {
 		Padding(0, 1).
 		Render(strings.Join(lines, "\n"))
 
-	fmt.Println()
-	fmt.Println(box)
-	fmt.Println()
+	println()
+	println(box)
+	println()
 }
 
 func formatMemory(free, total string) string {
@@ -338,7 +372,7 @@ func EntryRow(address, comment string, disabled bool) {
 	if disabled {
 		line += "  " + styleDis.Render("[off]")
 	}
-	fmt.Println(line)
+	println(line)
 }
 
 // ListRow prints one row of the `list` command output.
@@ -349,5 +383,5 @@ func ListRow(name string, count int, disabled int) {
 	if disabled > 0 {
 		line += "  " + styleDis.Render(fmt.Sprintf("(%d off)", disabled))
 	}
-	fmt.Println(line)
+	println(line)
 }

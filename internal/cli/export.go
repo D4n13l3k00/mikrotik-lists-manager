@@ -63,6 +63,11 @@ func runExport(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if exportOutFile == "" {
+		output.SetWriter(os.Stderr)
+		defer output.ResetWriter()
+	}
+
 	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(exportFlags.skipTLSVerify))
 	ctx := cmd.Context()
 
@@ -88,6 +93,9 @@ func runExport(cmd *cobra.Command, args []string) error {
 				if e.Comment != "" {
 					line += fmt.Sprintf(" comment=%q", e.Comment)
 				}
+				if e.Disabled.Bool() {
+					line += " disabled=yes"
+				}
 				sb.WriteString(line + "\n")
 			}
 		default:
@@ -95,10 +103,14 @@ func runExport(cmd *cobra.Command, args []string) error {
 				sb.WriteString(fmt.Sprintf("# ── %s ──\n", listName))
 			}
 			for _, e := range entries {
+				prefix := ""
+				if e.Disabled.Bool() {
+					prefix = "!"
+				}
 				if e.Comment != "" {
-					sb.WriteString(fmt.Sprintf("%s  ## %s\n", e.Address, e.Comment))
+					sb.WriteString(fmt.Sprintf("%s%s  ## %s\n", prefix, e.Address, e.Comment))
 				} else {
-					sb.WriteString(e.Address + "\n")
+					sb.WriteString(prefix + e.Address + "\n")
 				}
 			}
 		}
