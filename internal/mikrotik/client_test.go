@@ -120,9 +120,9 @@ func TestRenameList(t *testing.T) {
 	defer ts.Close()
 
 	client := mikrotik.NewClient(ts.URL, "user", "pass", true)
-	var progressCalled bool
+	var progressCalled atomic.Bool
 	n, err := client.RenameList(context.Background(), "old", "new", 2, func(done, total int) {
-		progressCalled = true
+		progressCalled.Store(true)
 	})
 	if err != nil {
 		t.Fatalf("RenameList failed: %v", err)
@@ -130,7 +130,7 @@ func TestRenameList(t *testing.T) {
 	if n != 2 || patchCount.Load() != 2 {
 		t.Errorf("expected 2 renames, got n=%d, patchCount=%d", n, patchCount.Load())
 	}
-	if !progressCalled {
+	if !progressCalled.Load() {
 		t.Errorf("expected progress callback to be called")
 	}
 }

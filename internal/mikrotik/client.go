@@ -302,6 +302,7 @@ func (c *Client) RenameList(ctx context.Context, oldName, newName string, concur
 	g.SetLimit(limit)
 
 	var done atomic.Int64
+	var progressMu sync.Mutex
 	for _, e := range entries {
 		if gctx.Err() != nil {
 			break
@@ -313,7 +314,9 @@ func (c *Client) RenameList(ctx context.Context, oldName, newName string, concur
 			}
 			d := int(done.Add(1))
 			if onProgress != nil {
+				progressMu.Lock()
 				onProgress(d, total)
+				progressMu.Unlock()
 			}
 			return nil
 		})
