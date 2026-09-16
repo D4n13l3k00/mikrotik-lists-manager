@@ -192,6 +192,16 @@ func runPurge(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		if !purgeDryRun {
+			script := fmt.Sprintf("/ip firewall address-list remove [find where list=%q]", listName)
+			if err := client.Execute(ctx, script); err == nil {
+				output.Summary(0, len(current), 0, false)
+				continue
+			} else {
+				output.Warn(fmt.Sprintf("Быстрая очистка через скрипт не удалась: %v. Переключение на стандартное удаление...", err))
+			}
+		}
+
 		if err := syncer.Apply(ctx, client, listName, changes, purgeDryRun, purgeVerbose, purgeConcurrency); err != nil {
 			return err
 		}

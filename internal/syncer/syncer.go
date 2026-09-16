@@ -2,8 +2,10 @@ package syncer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -208,6 +210,7 @@ func Apply(ctx context.Context, client APIClient, listName string, changes []Cha
 
 	if err := g.Wait(); err != nil {
 		if useProgress {
+			_ = bar.Clear()
 			fmt.Fprintln(os.Stderr)
 		}
 		return err
@@ -219,4 +222,163 @@ func Apply(ctx context.Context, client APIClient, listName string, changes []Cha
 
 	output.Summary(int(added.Load()), int(removed.Load()), int(updated.Load()), dryRun)
 	return nil
+}
+
+// ScriptExecutor is an interface for clients that support running RouterOS scripts.
+type ScriptExecutor interface {
+	Execute(ctx context.Context, script string) error
+}
+
+// DefaultBatchSize is the default number of changes packed into a single RouterOS script.
+const DefaultBatchSize = 250
+
+// ApplyBatch executes changes in batches using RouterOS scripts for maximum speed.
+// If the client does not implement ScriptExecutor or if dry-run is requested,
+// it gracefully falls back to Apply.
+func ApplyBatch(ctx context.Context, client APIClient, listName string, changes []Change, dryRun, verbose bool, batchSize int) error {
+	if len(changes) == 0 {
+		output.Summary(0, 0, 0, dryRun)
+		return nil
+	}
+
+	exec, ok := client.(ScriptExecutor)
+	if !ok || dryRun {
+		return Apply(ctx, client, listName, changes, dryRun, verbose, 5)
+	}
+
+	if batchSize <= 0 {
+		batchSize = DefaultBatchSize
+	}
+
+	useProgress := len(changes) >= progressThreshold
+
+	var bar *progressbar.ProgressBar
+	if useProgress {
+		bar = progressbar.NewOptions(len(changes),
+			progressbar.OptionSetWriter(os.Stderr),
+			progressbar.OptionEnableColorCodes(true),
+			progressbar.OptionSetWidth(40),
+			progressbar.OptionShowCount(),
+			progressbar.OptionSetDescription("[cyan]Турбо-применение изменений...[reset]"),
+			progressbar.OptionSetTheme(progressbar.Theme{
+				Saucer:        "[green]=[reset]",
+				SaucerHead:    "[green]>[reset]",
+				SaucerPadding: " ",
+				BarStart:      "[",
+				BarEnd:        "]",
+			}),
+		)
+	}
+
+	var added, removed, updated int
+
+	for i := 0; i < len(changes); i += batchSize {
+		if err := ctx.Err(); err != nil {
+			if useProgress {
+				_ = bar.Clear()
+			}
+			return err
+		}
+
+		end := i + batchSize
+		if end > len(changes) {
+			end = len(changes)
+		}
+		batch := changes[i:end]
+
+		script := BuildBatchScript(listName, batch)
+		if err := exec.Execute(ctx, script); err != nil {
+			if isCancelErr(ctx, err) {
+				if useProgress {
+					_ = bar.Clear()
+				}
+				return err
+			}
+			if useProgress {
+				bar.Clear() //nolint:errcheck
+			}
+			output.Warn(fmt.Sprintf("Пакетное выполнение вернуло ошибку: %v. Переключение на стандартный режим...", err))
+			remainingChanges := changes[i:]
+			return Apply(ctx, client, listName, remainingChanges, false, verbose, 5)
+		}
+
+		for _, ch := range batch {
+			switch ch.Action {
+			case ActionAdd:
+				if verbose && !useProgress {
+					output.Add(ch.Address, ch.NewComment, ch.NewDisabled)
+				}
+				added++
+			case ActionDelete:
+				if verbose && !useProgress {
+					output.Remove(ch.Address, ch.OldComment)
+				}
+				removed++
+			case ActionUpdate:
+				if verbose && !useProgress {
+					output.Update(ch.Address, ch.OldComment, ch.NewComment, ch.OldDisabled, ch.NewDisabled)
+				}
+				updated++
+			}
+		}
+
+		if useProgress {
+			_ = bar.Add(len(batch))
+		}
+	}
+
+	if useProgress {
+		fmt.Fprintln(os.Stderr)
+	}
+
+	output.Summary(added, removed, updated, false)
+	return nil
+}
+
+// BuildBatchScript generates a safe RouterOS script for a batch of changes.
+func BuildBatchScript(listName string, batch []Change) string {
+	var sb strings.Builder
+	sb.WriteString("/ip firewall address-list\n")
+	for _, ch := range batch {
+		switch ch.Action {
+		case ActionAdd:
+			line := fmt.Sprintf(":do { add list=%q address=%q", listName, ch.Address)
+			if ch.NewComment != "" {
+				line += fmt.Sprintf(" comment=%q", ch.NewComment)
+			}
+			if ch.NewDisabled {
+				line += " disabled=yes"
+			}
+			line += " } on-error={}"
+			sb.WriteString(line + "\n")
+		case ActionDelete:
+			line := fmt.Sprintf(":do { remove [find where list=%q and address=%q] } on-error={}", listName, ch.Address)
+			sb.WriteString(line + "\n")
+		case ActionUpdate:
+			line := fmt.Sprintf(":do { set [find where list=%q and address=%q]", listName, ch.Address)
+			line += fmt.Sprintf(" comment=%q", ch.NewComment)
+			if ch.NewDisabled {
+				line += " disabled=yes"
+			} else {
+				line += " disabled=no"
+			}
+			line += " } on-error={}"
+			sb.WriteString(line + "\n")
+		}
+	}
+	return sb.String()
+}
+
+func isCancelErr(ctx context.Context, err error) bool {
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "cancel") || strings.Contains(msg, "interrupt")
 }

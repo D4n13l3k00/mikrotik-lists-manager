@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -184,3 +185,78 @@ func TestRetriesOn500(t *testing.T) {
 		t.Errorf("expected 3 attempts, got %d", attempts.Load())
 	}
 }
+
+func TestExecuteDirect(t *testing.T) {
+	var executedScript string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Path == "/rest/execute" {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			executedScript = body["script"]
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[]`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := mikrotik.NewClient(ts.URL, "user", "pass", true)
+	err := client.Execute(context.Background(), "/log info test")
+	if err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if executedScript != "/log info test" {
+		t.Errorf("expected script /log info test, got %q", executedScript)
+	}
+}
+
+func TestExecuteFallbackSystemScript(t *testing.T) {
+	var createdName, runNumber, deletedPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/execute" {
+			// Simulating missing /rest/execute endpoint
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/rest/system/script" {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			createdName = body["name"]
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{".id":"*99","name":"` + createdName + `"}`))
+			return
+		}
+		if r.Method == "POST" && r.URL.Path == "/rest/system/script/run" {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			runNumber = body["number"]
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[]`))
+			return
+		}
+		if r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/rest/system/script/") {
+			deletedPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := mikrotik.NewClient(ts.URL, "user", "pass", true)
+	err := client.Execute(context.Background(), ":log info fallback")
+	if err != nil {
+		t.Fatalf("Execute fallback failed: %v", err)
+	}
+	if createdName == "" {
+		t.Errorf("expected temporary script to be created")
+	}
+	if runNumber != createdName {
+		t.Errorf("expected run number %q, got %q", createdName, runNumber)
+	}
+	if deletedPath != "/rest/system/script/*99" && deletedPath != "/rest/system/script/"+createdName {
+		t.Errorf("expected cleanup deletion, got %q", deletedPath)
+	}
+}
+

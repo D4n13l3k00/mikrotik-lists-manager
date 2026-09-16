@@ -394,3 +394,81 @@ func (c *Client) GetRouterInfo(ctx context.Context) (*RouterInfo, error) {
 		UpgradeFirmware: rb.UpgradeFirmware,
 	}, nil
 }
+
+// Execute runs an arbitrary RouterOS script or CLI command via REST API.
+// It first attempts POST /rest/execute. If that returns 404 (endpoint unavailable),
+// it falls back to creating, running, and deleting a temporary script via /rest/system/script.
+func (c *Client) Execute(ctx context.Context, script string) error {
+	payload, err := json.Marshal(map[string]string{"script": script})
+	if err != nil {
+		return fmt.Errorf("marshal execute payload: %w", err)
+	}
+
+	resp, err := c.do(ctx, "POST", "/rest/execute", strings.NewReader(string(payload)))
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return nil
+		}
+		// If 404 Not Found, fall back to /rest/system/script
+		if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
+			return checkStatus(resp)
+		}
+	}
+
+	return c.executeViaSystemScript(ctx, script)
+}
+
+func (c *Client) executeViaSystemScript(ctx context.Context, script string) error {
+	scriptName := fmt.Sprintf("mlm_tmp_%d", time.Now().UnixNano())
+	createPayload, err := json.Marshal(map[string]string{
+		"name":                     scriptName,
+		"source":                   script,
+		"dont-require-permissions": "yes",
+	})
+	if err != nil {
+		return fmt.Errorf("marshal script: %w", err)
+	}
+
+	createResp, err := c.do(ctx, "POST", "/rest/system/script", strings.NewReader(string(createPayload)))
+	if err != nil {
+		return fmt.Errorf("create script: %w", err)
+	}
+	defer createResp.Body.Close()
+	if err := checkStatus(createResp); err != nil {
+		return fmt.Errorf("create script: %w", err)
+	}
+
+	var created struct {
+		ID string `json:".id"`
+	}
+	_ = json.NewDecoder(createResp.Body).Decode(&created)
+
+	defer func() {
+		target := scriptName
+		if created.ID != "" {
+			target = created.ID
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		delResp, delErr := c.do(cleanupCtx, "DELETE", "/rest/system/script/"+target, nil)
+		if delErr == nil {
+			delResp.Body.Close()
+		}
+	}()
+
+	runPayload, err := json.Marshal(map[string]string{
+		"number": scriptName,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal run script: %w", err)
+	}
+
+	runResp, err := c.do(ctx, "POST", "/rest/system/script/run", strings.NewReader(string(runPayload)))
+	if err != nil {
+		return fmt.Errorf("run script: %w", err)
+	}
+	defer runResp.Body.Close()
+	return checkStatus(runResp)
+}
+

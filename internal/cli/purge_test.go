@@ -187,7 +187,7 @@ func TestPurgeAll(t *testing.T) {
 	t.Setenv("MT_SNAPSHOTS_DIR", tempSnapDir)
 
 	var mu sync.Mutex
-	deletedIDs := make(map[string]bool)
+	var executedScripts []string
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -214,10 +214,11 @@ func TestPurgeAll(t *testing.T) {
 			return
 		}
 
-		if r.Method == "DELETE" {
-			id := strings.TrimPrefix(r.URL.Path, "/rest/ip/firewall/address-list/")
+		if r.Method == "POST" && r.URL.Path == "/rest/execute" {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			mu.Lock()
-			deletedIDs[id] = true
+			executedScripts = append(executedScripts, body["script"])
 			mu.Unlock()
 			w.WriteHeader(http.StatusOK)
 			return
@@ -235,8 +236,67 @@ func TestPurgeAll(t *testing.T) {
 	}
 
 	mu.Lock()
-	if !deletedIDs["*1"] || !deletedIDs["*2"] {
-		t.Errorf("expected both *1 and *2 to be deleted with --all, got: %+v", deletedIDs)
+	if len(executedScripts) != 2 {
+		t.Errorf("expected 2 script executions, got %d: %v", len(executedScripts), executedScripts)
 	}
 	mu.Unlock()
 }
+
+func TestPurgeFastScript(t *testing.T) {
+	tempSnapDir := t.TempDir()
+	t.Setenv("MT_SNAPSHOTS_DIR", tempSnapDir)
+
+	var mu sync.Mutex
+	var executedScript string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.Method == "GET" && r.URL.Path == "/rest/system/resource" {
+			w.Write([]byte(`{"board-name":"RB4011","version":"7.15"}`))
+			return
+		}
+
+		if r.Method == "GET" && r.URL.Path == "/rest/system/routerboard" {
+			w.Write([]byte(`{"model":"RB4011iGS+"}`))
+			return
+		}
+
+		if r.Method == "GET" && r.URL.Path == "/rest/ip/firewall/address-list" {
+			entries := []map[string]any{
+				{".id": "*1", "address": "1.1.1.1", "list": "vpn"},
+				{".id": "*2", "address": "8.8.8.8", "list": "vpn"},
+			}
+			json.NewEncoder(w).Encode(entries)
+			return
+		}
+
+		if r.Method == "POST" && r.URL.Path == "/rest/execute" {
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			executedScript = body["script"]
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	host := ts.URL
+	cmd := rootCmd
+	cmd.SetArgs([]string{"purge", "-H", host, "-u", "admin", "-p", "pass", "-l", "vpn", "-y", "-k"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("purge failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	expected := `/ip firewall address-list remove [find where list="vpn"]`
+	if executedScript != expected {
+		t.Errorf("expected executed script %q, got %q", expected, executedScript)
+	}
+}
+

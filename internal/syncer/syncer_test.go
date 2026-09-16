@@ -3,6 +3,7 @@ package syncer_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
@@ -250,3 +251,75 @@ func TestApplyPropagatesError(t *testing.T) {
 		t.Error("expected error, got nil")
 	}
 }
+
+type mockBatchClient struct {
+	mockClient
+	executedScripts []string
+	failExecute     bool
+}
+
+func (m *mockBatchClient) Execute(ctx context.Context, script string) error {
+	if m.failExecute {
+		return fmt.Errorf("execute error")
+	}
+	m.executedScripts = append(m.executedScripts, script)
+	return nil
+}
+
+func TestBuildBatchScript(t *testing.T) {
+	changes := []syncer.Change{
+		{Action: syncer.ActionAdd, Address: "1.1.1.1", NewComment: "Cloudflare", NewDisabled: true},
+		{Action: syncer.ActionDelete, Address: "2.2.2.2"},
+		{Action: syncer.ActionUpdate, Address: "3.3.3.3", NewComment: "Updated", NewDisabled: false},
+	}
+
+	script := syncer.BuildBatchScript("vpn", changes)
+	expectedLines := []string{
+		`/ip firewall address-list`,
+		`:do { add list="vpn" address="1.1.1.1" comment="Cloudflare" disabled=yes } on-error={}`,
+		`:do { remove [find where list="vpn" and address="2.2.2.2"] } on-error={}`,
+		`:do { set [find where list="vpn" and address="3.3.3.3"] comment="Updated" disabled=no } on-error={}`,
+	}
+
+	for _, line := range expectedLines {
+		if !strings.Contains(script, line) {
+			t.Errorf("expected script to contain %q, got:\n%s", line, script)
+		}
+	}
+}
+
+func TestApplyBatch(t *testing.T) {
+	client := &mockBatchClient{}
+	changes := []syncer.Change{
+		{Action: syncer.ActionAdd, Address: "1.1.1.1"},
+		{Action: syncer.ActionAdd, Address: "2.2.2.2"},
+		{Action: syncer.ActionAdd, Address: "3.3.3.3"},
+	}
+
+	// Test batch with batchSize 2
+	err := syncer.ApplyBatch(context.Background(), client, "vpn", changes, false, false, 2)
+	if err != nil {
+		t.Fatalf("ApplyBatch failed: %v", err)
+	}
+
+	if len(client.executedScripts) != 2 {
+		t.Errorf("expected 2 batch scripts, got %d", len(client.executedScripts))
+	}
+}
+
+func TestApplyBatchFallbackOnExecuteError(t *testing.T) {
+	client := &mockBatchClient{failExecute: true}
+	changes := []syncer.Change{
+		{Action: syncer.ActionAdd, Address: "1.1.1.1"},
+	}
+
+	// Should fallback to individual Apply
+	err := syncer.ApplyBatch(context.Background(), client, "vpn", changes, false, false, 10)
+	if err != nil {
+		t.Fatalf("ApplyBatch fallback failed: %v", err)
+	}
+	if len(client.added) != 1 || client.added[0] != "1.1.1.1" {
+		t.Errorf("expected fallback to add via APIClient, got: %v", client.added)
+	}
+}
+

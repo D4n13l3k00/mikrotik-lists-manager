@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -129,9 +130,10 @@ func helpFunc(cmd *cobra.Command, args []string) {
 }
 
 var rootCmd = &cobra.Command{
-	Use:     "mlm",
-	Aliases: []string{"mikrotik-lists-manager"},
-	Short:   "Синхронизация address-list MikroTik из файла",
+	Use:          "mlm",
+	Aliases:      []string{"mikrotik-lists-manager"},
+	Short:        "Синхронизация address-list MikroTik из файла",
+	SilenceUsage: true,
 	Long: `Поддерживаемые форматы файлов:
   native    — IP/CIDR построчно, ## комментарий для MikroTik, # только локально
   mikrotik  — формат экспорта (/ip firewall address-list ... add address=...)
@@ -175,6 +177,25 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+var errInterrupted = errors.New("прервано пользователем")
+
+func isInterrupt(ctx context.Context, err error) bool {
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, errInterrupted) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "interrupt") ||
+		strings.Contains(msg, "canceled") ||
+		strings.Contains(msg, "cancelled") ||
+		strings.Contains(msg, "deadline exceeded")
+}
+
 func Execute(v, commit string) {
 	if v != "" && v != "dev" {
 		version.Version = v
@@ -195,6 +216,9 @@ func Execute(v, commit string) {
 
 	rootCmd.Version = version.Version + " (" + version.Commit + ")"
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
+		if errors.Is(err, errInterrupted) || isInterrupt(ctx, err) {
+			os.Exit(130)
+		}
 		os.Exit(1)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/parser"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/source"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/syncer"
 )
 
 const appendRemoveProgressThreshold = 10
@@ -29,6 +30,9 @@ var appendFormat string
 var appendConcurrency int
 var appendResolveDomains bool
 var appendDNS string
+var appendFast bool
+var appendBatch bool
+var appendBatchSize int
 
 var appendCmd = &cobra.Command{
 	Use:   "append [file|url]",
@@ -38,6 +42,7 @@ var appendCmd = &cobra.Command{
 
 Примеры:
   mlm append extra.list -H 192.168.1.1 -u admin -l vpn-routes
+  mlm append extra.list -H 192.168.1.1 -u admin -l vpn-routes --fast
   mlm append https://example.com/ips.txt -H 192.168.1.1 -u admin -l vpn-routes
   mlm append domains.lst -H 192.168.1.1 -u admin -l vpn-routes --resolve-domains`,
 	Args: cobra.ExactArgs(1),
@@ -55,9 +60,24 @@ func init() {
 	appendCmd.Flags().IntVarP(&appendConcurrency, "concurrency", "c", 5, "Число параллельных запросов к API (0 = последовательно)")
 	appendCmd.Flags().BoolVar(&appendResolveDomains, "resolve-domains", false, "Разрешать доменные имена в IP-адреса через DNS")
 	appendCmd.Flags().StringVar(&appendDNS, "dns", "", "Пользовательский DNS-сервер для резолвинга (например: 1.1.1.1:53)")
+	appendCmd.Flags().BoolVar(&appendFast, "fast", false, "Турбо-режим: добавление записей пакетами через RouterOS скрипты")
+	appendCmd.Flags().BoolVar(&appendBatch, "batch", false, "Синоним --fast: добавление записей пакетами")
+	appendCmd.Flags().IntVar(&appendBatchSize, "batch-size", syncer.DefaultBatchSize, "Размер пакета записей для --fast/--batch (по умолчанию 250)")
 }
 
 func runAppend(cmd *cobra.Command, args []string) error {
+	defer func() {
+		appendFlags = connFlags{}
+		appendDryRun = false
+		appendFormat = ""
+		appendConcurrency = 5
+		appendResolveDomains = false
+		appendDNS = ""
+		appendFast = false
+		appendBatch = false
+		appendBatchSize = 0
+	}()
+
 	host := resolve(appendFlags.host, "MT_HOST", loadedConfig.Host)
 	user := resolve(appendFlags.user, "MT_USER", loadedConfig.User)
 
@@ -137,6 +157,29 @@ func runAppend(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
+		if appendFast || appendBatch {
+			changes := make([]syncer.Change, len(toAdd))
+			for i, e := range toAdd {
+				changes[i] = syncer.Change{
+					Action:      syncer.ActionAdd,
+					Address:     e.Address,
+					NewComment:  e.Comment,
+					NewDisabled: e.Disabled,
+				}
+			}
+			bs := appendBatchSize
+			if bs <= 0 {
+				bs = syncer.DefaultBatchSize
+			}
+			if err := syncer.ApplyBatch(ctx, client, listName, changes, appendDryRun, false, bs); err != nil {
+				return err
+			}
+			if skipped > 0 {
+				output.Info(fmt.Sprintf("%d записей уже существовало.", skipped))
+			}
+			continue
+		}
+
 		useProgress := len(toAdd) >= appendRemoveProgressThreshold && !appendDryRun
 		var bar *progressbar.ProgressBar
 		if useProgress {
@@ -203,6 +246,9 @@ var removeFlags connFlags
 var removeDryRun bool
 var removeFormat string
 var removeConcurrency int
+var removeFast bool
+var removeBatch bool
+var removeBatchSize int
 
 var removeCmd = &cobra.Command{
 	Use:   "remove [file]",
@@ -212,6 +258,7 @@ var removeCmd = &cobra.Command{
 
 Примеры:
   mlm remove telegram.list -H 192.168.1.1 -u admin -l vpn-routes
+  mlm remove telegram.list -H 192.168.1.1 -u admin -l vpn-routes --fast
   mlm remove telegram.list -H 192.168.1.1 -u admin -l list1,list2 -n`,
 	Args: cobra.ExactArgs(1),
 	RunE: runRemove,
@@ -226,9 +273,22 @@ func init() {
 	removeCmd.Flags().BoolVarP(&removeDryRun, "dry-run", "n", false, "Показать изменения без применения")
 	removeCmd.Flags().StringVarP(&removeFormat, "format", "f", "auto", "Формат файла: auto, native, mikrotik")
 	removeCmd.Flags().IntVarP(&removeConcurrency, "concurrency", "c", 5, "Число параллельных запросов к API (0 = последовательно)")
+	removeCmd.Flags().BoolVar(&removeFast, "fast", false, "Турбо-режим: удаление записей пакетами через RouterOS скрипты")
+	removeCmd.Flags().BoolVar(&removeBatch, "batch", false, "Синоним --fast: удаление записей пакетами")
+	removeCmd.Flags().IntVar(&removeBatchSize, "batch-size", syncer.DefaultBatchSize, "Размер пакета записей для --fast/--batch (по умолчанию 250)")
 }
 
 func runRemove(cmd *cobra.Command, args []string) error {
+	defer func() {
+		removeFlags = connFlags{}
+		removeDryRun = false
+		removeFormat = ""
+		removeConcurrency = 5
+		removeFast = false
+		removeBatch = false
+		removeBatchSize = 0
+	}()
+
 	host := resolve(removeFlags.host, "MT_HOST", loadedConfig.Host)
 	user := resolve(removeFlags.user, "MT_USER", loadedConfig.User)
 
@@ -307,6 +367,26 @@ func runRemove(cmd *cobra.Command, args []string) error {
 		if len(toDelete) == 0 {
 			fmt.Println()
 			output.Info("Нечего удалять.")
+			continue
+		}
+
+		if removeFast || removeBatch {
+			changes := make([]syncer.Change, len(toDelete))
+			for i, e := range toDelete {
+				changes[i] = syncer.Change{
+					Action:     syncer.ActionDelete,
+					Address:    e.Address,
+					OldComment: e.Comment,
+					ID:         e.ID,
+				}
+			}
+			bs := removeBatchSize
+			if bs <= 0 {
+				bs = syncer.DefaultBatchSize
+			}
+			if err := syncer.ApplyBatch(ctx, client, listName, changes, removeDryRun, false, bs); err != nil {
+				return err
+			}
 			continue
 		}
 

@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/huh"
@@ -10,7 +14,9 @@ import (
 	"golang.org/x/term"
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/dnsresolver"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/parser"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/snapshot"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/source"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/syncer"
@@ -27,6 +33,9 @@ var syncForce bool
 var syncResolveDomains bool
 var syncDNS string
 var syncNoSnapshot bool
+var syncFast bool
+var syncBatch bool
+var syncBatchSize int
 
 var syncCmd = &cobra.Command{
 	Use:   "sync [file|url]",
@@ -38,8 +47,12 @@ address-list на MikroTik и применяет изменения.
 
 При нескольких списках один и тот же источник синхронизируется в каждый список последовательно.
 
+Для больших списков (тысячи записей) используйте --fast / --batch для турбо-применения
+пакетами через RouterOS скрипты (в десятки раз быстрее REST API).
+
 Примеры:
   mlm sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes
+  mlm sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes --fast
   mlm sync https://example.com/vpn.lst -H 192.168.1.1 -u admin -l vpn-routes
   mlm sync domains.txt -H 192.168.1.1 -u admin -l vpn-routes --resolve-domains
   mlm sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -n
@@ -64,9 +77,29 @@ func init() {
 	syncCmd.Flags().BoolVar(&syncResolveDomains, "resolve-domains", false, "Разрешать доменные имена в IP-адреса через DNS")
 	syncCmd.Flags().StringVar(&syncDNS, "dns", "", "Пользовательский DNS-сервер для резолвинга (например: 1.1.1.1:53)")
 	syncCmd.Flags().BoolVar(&syncNoSnapshot, "no-snapshot", false, "Не создавать автоматический снимок перед применением изменений")
+	syncCmd.Flags().BoolVar(&syncFast, "fast", false, "Турбо-режим: применение изменений пакетами через RouterOS скрипты")
+	syncCmd.Flags().BoolVar(&syncBatch, "batch", false, "Синоним --fast: применение изменений пакетами")
+	syncCmd.Flags().IntVar(&syncBatchSize, "batch-size", syncer.DefaultBatchSize, "Размер пакета записей для --fast/--batch (по умолчанию 250)")
 }
 
 func runSync(cmd *cobra.Command, args []string) error {
+	defer func() {
+		cmd.SetContext(nil)
+		syncFlags = connFlags{}
+		syncDryRun = false
+		syncFormat = ""
+		syncVerbose = false
+		syncConcurrency = 5
+		syncWatch = false
+		syncWatchInterval = 3
+		syncForce = false
+		syncResolveDomains = false
+		syncDNS = ""
+		syncNoSnapshot = false
+		syncFast = false
+		syncBatch = false
+		syncBatchSize = 0
+	}()
 	if syncWatch && args[0] == "-" {
 		return fmt.Errorf("--watch несовместим с чтением из stdin")
 	}
@@ -166,8 +199,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 				}
 			}
 
+			var snapMeta *snapshot.SnapshotMeta
 			if !syncDryRun && !syncNoSnapshot && len(changes) > 0 {
-				snapMeta, sErr := snapshot.Save(host, listName, current)
+				var sErr error
+				snapMeta, sErr = snapshot.Save(host, listName, current)
 				if sErr != nil {
 					output.Warn(fmt.Sprintf("не удалось создать автоматический снимок: %v", sErr))
 				} else {
@@ -179,14 +214,55 @@ func runSync(cmd *cobra.Command, args []string) error {
 			if syncDryRun {
 				output.Info("(dry run — изменения не будут применены)")
 			}
-			if err := syncer.Apply(ctx, client, listName, changes, syncDryRun, syncVerbose, syncConcurrency); err != nil {
-				return err
+
+			var applyErr error
+			if syncFast || syncBatch {
+				bs := syncBatchSize
+				if bs <= 0 {
+					bs = syncer.DefaultBatchSize
+				}
+				applyErr = syncer.ApplyBatch(ctx, client, listName, changes, syncDryRun, syncVerbose, bs)
+			} else {
+				applyErr = syncer.Apply(ctx, client, listName, changes, syncDryRun, syncVerbose, syncConcurrency)
+			}
+
+			if applyErr != nil {
+				if isInterrupt(ctx, applyErr) {
+					fmt.Fprintln(os.Stderr)
+					output.Warn(fmt.Sprintf("Синхронизация списка %q прервана пользователем (Ctrl+C).", listName))
+					if snapMeta != nil {
+						if term.IsTerminal(int(os.Stdin.Fd())) || stdinReader != nil {
+							if promptRollbackConfirm(listName, snapMeta.ID) {
+								output.Header(fmt.Sprintf("Откат списка %q к снимку %s", listName, snapMeta.ID))
+								if rErr := performRollback(client, host, listName, snapMeta.ID, syncFast || syncBatch); rErr != nil {
+									output.Warn(fmt.Sprintf("Не удалось автоматически выполнить откат: %v", rErr))
+									output.Info(fmt.Sprintf("Попробуйте выполнить откат вручную:\n  mlm rollback -l %s --id %s", listName, snapMeta.ID))
+								} else {
+									output.Info(fmt.Sprintf("Список %q успешно возвращён в исходное состояние.", listName))
+								}
+							} else {
+								fmt.Println()
+								output.Info(fmt.Sprintf("Откат отменён. Вы можете выполнить откат вручную в любое время:\n  mlm rollback -l %s --id %s", listName, snapMeta.ID))
+							}
+						} else {
+							fmt.Println()
+							output.Warn(fmt.Sprintf("Для отката списка %q к исходному состоянию выполните:\n  mlm rollback -l %s --id %s", listName, listName, snapMeta.ID))
+						}
+					}
+					cmd.SilenceErrors = true
+					return errInterrupted
+				}
+				return applyErr
 			}
 		}
 		return nil
 	}
 
 	if err := doSync(); err != nil {
+		if isInterrupt(ctx, err) {
+			cmd.SilenceErrors = true
+			return errInterrupted
+		}
 		return err
 	}
 	if !syncWatch {
@@ -221,4 +297,80 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
+}
+
+var stdinReader io.Reader
+
+func promptRollbackConfirm(listName, snapID string) bool {
+	if stdinReader != nil {
+		scanner := bufio.NewScanner(stdinReader)
+		if scanner.Scan() {
+			text := strings.TrimSpace(strings.ToLower(scanner.Text()))
+			return text == "" || text == "y" || text == "yes" || text == "д" || text == "да"
+		}
+		return false
+	}
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return false
+	}
+
+	var confirmed bool = true
+	err := huh.NewConfirm().
+		Title(fmt.Sprintf("Откатить изменения списка %q к снимку %s?", listName, snapID)).
+		Affirmative("Да, откатить").
+		Negative("Нет, оставить").
+		Value(&confirmed).
+		Run()
+	if err == nil {
+		return confirmed
+	}
+
+	fmt.Fprintf(os.Stderr, "Откатить изменения списка %q к снимку %s? [Y/n]: ", listName, snapID)
+	scanner := bufio.NewScanner(os.Stdin)
+	if scanner.Scan() {
+		text := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		return text == "" || text == "y" || text == "yes" || text == "д" || text == "да"
+	}
+	return false
+}
+
+func performRollback(client *mikrotik.Client, host, listName, snapID string, fast bool) error {
+	rollbackCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	snap, err := snapshot.Load(host, listName, snapID)
+	if err != nil {
+		return fmt.Errorf("загрузка снимка: %w", err)
+	}
+
+	if snap.Total == 0 {
+		script := fmt.Sprintf("/ip firewall address-list remove [find where list=%q]", listName)
+		if err := client.Execute(rollbackCtx, script); err == nil {
+			output.Summary(0, 0, 0, false)
+			return nil
+		}
+	}
+
+	current, err := client.GetList(rollbackCtx, listName)
+	if err != nil {
+		return fmt.Errorf("получение списка с роутера: %w", err)
+	}
+
+	desired := make([]parser.Entry, 0, len(snap.Entries))
+	for _, e := range snap.Entries {
+		desired = append(desired, parser.Entry{
+			Address:  e.Address,
+			Comment:  e.Comment,
+			Disabled: e.Disabled.Bool(),
+		})
+	}
+
+	changes, _ := syncer.Diff(desired, current)
+	if len(changes) == 0 {
+		output.Info("Список на роутере уже соответствует снимку.")
+		return nil
+	}
+
+	return syncer.ApplyBatch(rollbackCtx, client, listName, changes, false, false, syncer.DefaultBatchSize)
 }
