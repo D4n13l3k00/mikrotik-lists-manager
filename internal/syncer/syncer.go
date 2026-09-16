@@ -102,9 +102,10 @@ func Diff(desired []parser.Entry, current []mikrotik.AddressListEntry) ([]Change
 	for _, have := range current {
 		if _, wanted := desiredMap[parser.NormalizeAddr(have.Address)]; !wanted {
 			changes = append(changes, Change{
-				Action:  ActionDelete,
-				Address: have.Address,
-				ID:      have.ID,
+				Action:     ActionDelete,
+				Address:    have.Address,
+				OldComment: have.Comment,
+				ID:         have.ID,
 			})
 		}
 	}
@@ -180,7 +181,7 @@ func Apply(ctx context.Context, client APIClient, listName string, changes []Cha
 				}
 				added.Add(1)
 			case ActionDelete:
-				printEntry(func() { output.Remove(ch.Address, "") })
+				printEntry(func() { output.Remove(ch.Address, ch.OldComment) })
 				if !dryRun {
 					if err := client.DeleteEntry(gctx, ch.ID); err != nil {
 						return fmt.Errorf("delete %s: %w", ch.Address, err)

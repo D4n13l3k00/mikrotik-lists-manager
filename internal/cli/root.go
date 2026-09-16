@@ -221,6 +221,8 @@ func init() {
 	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(backupCmd)
 	rootCmd.AddCommand(renameCmd)
+	rootCmd.AddCommand(convertCmd)
+	rootCmd.AddCommand(purgeCmd)
 	rootCmd.AddCommand(completionCmd)
 
 	rootCmd.CompletionOptions.HiddenDefaultCmd = true
