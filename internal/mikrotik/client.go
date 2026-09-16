@@ -46,7 +46,7 @@ type Client struct {
 	pass       string
 }
 
-// NewClient creates a REST API client.
+// NewClient creates a direct REST API client (no proxy).
 // host может быть: "192.168.1.1", "http://192.168.1.1", "https://192.168.1.1:8443".
 // Если схема не указана — используется https.
 // skipTLSVerify отключает проверку сертификата (актуально для самоподписанных).
@@ -57,8 +57,13 @@ func NewClient(host, user, pass string, skipTLSVerify bool) *Client {
 	host = strings.TrimRight(host, "/")
 
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: skipTLSVerify}, //nolint:gosec
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: skipTLSVerify}, //nolint:gosec
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+		Proxy:               nil, // прямой доступ к роутеру
 	}
+
 	return &Client{
 		baseURL: host,
 		user:    user,

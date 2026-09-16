@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
 )
 
@@ -19,8 +18,8 @@ var infoCmd = &cobra.Command{
 версию прошивки и аптайм.
 
 Примеры:
-  mikrotik-lists-manager info -H 192.168.1.1 -u admin
-  mikrotik-lists-manager info --json`,
+  mlm info -H 192.168.1.1 -u admin
+  mlm info --json`,
 	RunE: runInfo,
 }
 
@@ -48,7 +47,7 @@ func runInfo(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(infoFlags.skipTLSVerify))
+	client := newClient(host, user, pass, resolveSkipTLS(infoFlags.skipTLSVerify))
 
 	info, err := client.GetRouterInfo(cmd.Context())
 	if err != nil {

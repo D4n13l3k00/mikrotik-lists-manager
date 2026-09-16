@@ -12,10 +12,13 @@ import (
 )
 
 const (
-	DefaultConfigFile        = ".mikrotik-lists-manager.yaml"
-	ConfigSubDirName         = "mikrotik-lists-manager"
+	DefaultConfigFile        = ".mlm.yaml"
+	LegacyConfigFile         = ".mikrotik-lists-manager.yaml"
+	ConfigSubDirName         = "mlm"
+	LegacyConfigSubDirName   = "mikrotik-lists-manager"
 	GlobalConfigFileName     = "config.yaml"
-	DefaultHomeConfigDotfile = ".mikrotik-lists-manager.yaml"
+	DefaultHomeConfigDotfile = ".mlm.yaml"
+	LegacyHomeConfigDotfile  = ".mikrotik-lists-manager.yaml"
 )
 
 // ProfileConfig holds connection and behaviour settings for a specific router profile.
@@ -26,6 +29,7 @@ type ProfileConfig struct {
 	List          string `yaml:"list,omitempty"`
 	SkipTLSVerify *bool  `yaml:"insecure,omitempty"`
 	DefaultFormat string `yaml:"default_format,omitempty"`
+	Proxy         string `yaml:"proxy,omitempty"`
 }
 
 // Insecure returns the profile's SkipTLSVerify value or falls back to the global setting.
@@ -44,6 +48,7 @@ type Config struct {
 	List           string                   `yaml:"list,omitempty"`
 	SkipTLSVerify  bool                     `yaml:"insecure,omitempty"`
 	DefaultFormat  string                   `yaml:"default_format,omitempty"`
+	Proxy          string                   `yaml:"proxy,omitempty"`
 	DefaultProfile string                   `yaml:"default_profile,omitempty"`
 	Profiles       map[string]ProfileConfig `yaml:"profiles,omitempty"`
 }
@@ -59,9 +64,9 @@ func DefaultGlobalConfigPath() (string, error) {
 
 // FindConfigFile looks for a config file following the priority:
 // 1. Explicit path (if non-empty)
-// 2. ./.mikrotik-lists-manager.yaml in current directory
-// 3. System user config dir (os.UserConfigDir()/mikrotik-lists-manager/config.yaml)
-// 4. ~/.mikrotik-lists-manager.yaml
+// 2. ./.mlm.yaml (or legacy ./.mikrotik-lists-manager.yaml) in current directory
+// 3. System user config dir (os.UserConfigDir()/mlm/config.yaml or legacy)
+// 4. ~/.mlm.yaml (or legacy ~/.mikrotik-lists-manager.yaml)
 func FindConfigFile(explicitPath string) (path string, found bool, err error) {
 	if explicitPath != "" {
 		if fi, err := os.Stat(explicitPath); err == nil && !fi.IsDir() {
@@ -74,11 +79,20 @@ func FindConfigFile(explicitPath string) (path string, found bool, err error) {
 	if fi, err := os.Stat(DefaultConfigFile); err == nil && !fi.IsDir() {
 		return DefaultConfigFile, true, nil
 	}
+	if fi, err := os.Stat(LegacyConfigFile); err == nil && !fi.IsDir() {
+		return LegacyConfigFile, true, nil
+	}
 
 	// 2. Global user config dir
 	if globalPath, err := DefaultGlobalConfigPath(); err == nil {
 		if fi, err := os.Stat(globalPath); err == nil && !fi.IsDir() {
 			return globalPath, true, nil
+		}
+	}
+	if dir, err := os.UserConfigDir(); err == nil {
+		legacyGlobal := filepath.Join(dir, LegacyConfigSubDirName, GlobalConfigFileName)
+		if fi, err := os.Stat(legacyGlobal); err == nil && !fi.IsDir() {
+			return legacyGlobal, true, nil
 		}
 	}
 
@@ -87,6 +101,10 @@ func FindConfigFile(explicitPath string) (path string, found bool, err error) {
 		homePath := filepath.Join(home, DefaultHomeConfigDotfile)
 		if fi, err := os.Stat(homePath); err == nil && !fi.IsDir() {
 			return homePath, true, nil
+		}
+		legacyHome := filepath.Join(home, LegacyHomeConfigDotfile)
+		if fi, err := os.Stat(legacyHome); err == nil && !fi.IsDir() {
+			return legacyHome, true, nil
 		}
 	}
 
@@ -108,6 +126,7 @@ func (c *Config) EffectiveProfile(profileName string) (ProfileConfig, error) {
 		List:          c.List,
 		SkipTLSVerify: &c.SkipTLSVerify,
 		DefaultFormat: c.DefaultFormat,
+		Proxy:         c.Proxy,
 	}
 
 	if profileName == "" {
@@ -144,6 +163,9 @@ func (c *Config) EffectiveProfile(profileName string) (ProfileConfig, error) {
 	}
 	if prof.DefaultFormat != "" {
 		effective.DefaultFormat = prof.DefaultFormat
+	}
+	if prof.Proxy != "" {
+		effective.Proxy = prof.Proxy
 	}
 
 	return effective, nil
@@ -182,7 +204,7 @@ func Save(path string, cfg Config) error {
 
 // Template returns the annotated YAML template written by `config init`.
 func Template() string {
-	return `# mikrotik-lists-manager configuration
+	return `# mlm configuration
 # Priority: CLI flag > env > selected profile > global config > defaults
 
 # Profile to use when --profile / -P is omitted
@@ -195,8 +217,9 @@ pass: ""
 list: ""
 insecure: false
 default_format: auto
+# proxy: "socks5://127.0.0.1:1080" # socks5, socks5h, http, https
 
-# Router profiles: mikrotik-lists-manager <cmd> -P <name>
+# Router profiles: mlm <cmd> -P <name>
 profiles:
   office:
     host: "192.168.88.1"
@@ -205,6 +228,7 @@ profiles:
     list: "office-routes"
     insecure: false
     default_format: native
+    # proxy: "http://proxy.corp:8080"
   home:
     host: "192.168.1.1:8443"
     user: "admin"
@@ -212,5 +236,6 @@ profiles:
     list: "vpn-routes"
     insecure: true
     default_format: auto
+    # proxy: "socks5://127.0.0.1:1080"
 `
 }

@@ -9,22 +9,24 @@ import (
 
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/optimizer"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/source"
 )
 
 var optimizeWrite bool
 
 var optimizeCmd = &cobra.Command{
-	Use:   "optimize [file]",
+	Use:   "optimize [file|url]",
 	Short: "Оптимизировать список: удалить дубли и поглощённые подсети",
-	Long: `Читает native .list файл и выполняет:
+	Long: `Читает native .list файл или URL и выполняет:
   - удаление дублирующихся адресов и доменов
   - удаление IP/CIDR которые полностью покрываются более широкой подсетью в том же списке
 
-По умолчанию выводит результат в stdout. С флагом --write перезаписывает файл.
+По умолчанию выводит результат в stdout. С флагом --write перезаписывает локальный файл.
 
 Примеры:
-  mikrotik-lists-manager optimize list.lst
-  mikrotik-lists-manager optimize list.lst --write`,
+  mlm optimize list.lst
+  mlm optimize https://example.com/huge.lst > list.lst
+  mlm optimize list.lst --write`,
 	Args: cobra.ExactArgs(1),
 	RunE: runOptimize,
 }
@@ -35,9 +37,14 @@ func init() {
 
 func runOptimize(cmd *cobra.Command, args []string) error {
 	filePath := args[0]
-	content, err := os.ReadFile(filePath)
+	if optimizeWrite && (strings.HasPrefix(filePath, "http://") || strings.HasPrefix(filePath, "https://") || filePath == "-") {
+		return fmt.Errorf("--write не поддерживается для URL или stdin")
+	}
+
+	proxyURL := resolveProxy(proxyFlag)
+	content, err := source.ReadWithProxy(cmd.Context(), filePath, proxyURL)
 	if err != nil {
-		return fmt.Errorf("чтение файла: %w", err)
+		return fmt.Errorf("чтение источника: %w", err)
 	}
 
 	if !optimizeWrite {

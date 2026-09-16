@@ -13,18 +13,18 @@ var completionCmd = &cobra.Command{
 	Long: `Генерирует скрипт автодополнения для указанной оболочки.
 
 Bash:
-  mikrotik-lists-manager completion bash > /etc/bash_completion.d/mikrotik-lists-manager
+  mlm completion bash > /etc/bash_completion.d/mlm
   # или для текущего пользователя:
-  mikrotik-lists-manager completion bash >> ~/.bash_completion
+  mlm completion bash >> ~/.bash_completion
 
 Zsh:
-  mikrotik-lists-manager completion zsh > "${fpath[1]}/_mikrotik-lists-manager"
+  mlm completion zsh > "${fpath[1]}/_mlm"
 
 Fish:
-  mikrotik-lists-manager completion fish > ~/.config/fish/completions/mikrotik-lists-manager.fish
+  mlm completion fish > ~/.config/fish/completions/mlm.fish
 
 PowerShell:
-  mikrotik-lists-manager completion powershell >> $PROFILE`,
+  mlm completion powershell >> $PROFILE`,
 	ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},
 	Args:                  cobra.ExactArgs(1),
 	DisableFlagsInUseLine: true,

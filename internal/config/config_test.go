@@ -68,11 +68,12 @@ func TestEffectiveProfile(t *testing.T) {
 	skipTrue := true
 	skipFalse := false
 	cfg := config.Config{
-		Host:          "192.168.1.1",
-		User:          "admin",
-		Pass:          "masterpass",
-		List:          "default-list",
-		SkipTLSVerify: false,
+		Host:           "192.168.1.1",
+		User:           "admin",
+		Pass:           "masterpass",
+		List:           "default-list",
+		SkipTLSVerify:  false,
+		Proxy:          "socks5://global:1080",
 		DefaultProfile: "home",
 		Profiles: map[string]config.ProfileConfig{
 			"home": {
@@ -84,6 +85,7 @@ func TestEffectiveProfile(t *testing.T) {
 				User:          "office-admin",
 				List:          "office-list",
 				SkipTLSVerify: &skipFalse,
+				Proxy:         "http://proxy.corp:8080",
 			},
 		},
 	}
@@ -102,6 +104,9 @@ func TestEffectiveProfile(t *testing.T) {
 	if !effHome.Insecure(false) {
 		t.Errorf("expected Insecure to be true")
 	}
+	if effHome.Proxy != "socks5://global:1080" {
+		t.Errorf("expected inherited proxy 'socks5://global:1080', got %q", effHome.Proxy)
+	}
 
 	// 2. Explicit profile "office"
 	effOffice, err := cfg.EffectiveProfile("office")
@@ -119,6 +124,9 @@ func TestEffectiveProfile(t *testing.T) {
 	}
 	if effOffice.Insecure(true) {
 		t.Errorf("expected Insecure to be false")
+	}
+	if effOffice.Proxy != "http://proxy.corp:8080" {
+		t.Errorf("expected profile proxy 'http://proxy.corp:8080', got %q", effOffice.Proxy)
 	}
 
 	// 3. Non-existent profile

@@ -7,7 +7,6 @@ import (
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 
-	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
 )
 
@@ -22,7 +21,7 @@ var renameCmd = &cobra.Command{
 	Long: `Переименовывает address-list на роутере, обновляя поле list у всех его записей.
 
 Примеры:
-  mikrotik-lists-manager rename vpn-old vpn-routes -H 192.168.1.1 -u admin`,
+  mlm rename vpn-old vpn-routes -H 192.168.1.1 -u admin`,
 	Args: cobra.ExactArgs(2),
 	RunE: runRename,
 }
@@ -53,7 +52,7 @@ func runRename(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(renameFlags.skipTLSVerify))
+	client := newClient(host, user, pass, resolveSkipTLS(renameFlags.skipTLSVerify))
 	ctx := cmd.Context()
 
 	output.Info(fmt.Sprintf("Переименование %q → %q на %s...", oldName, newName, host))

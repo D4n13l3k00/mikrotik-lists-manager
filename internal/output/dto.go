@@ -49,3 +49,37 @@ type RouterInfoDTO struct {
 	CurrentFirmware string `json:"current_firmware,omitempty"`
 	UpgradeFirmware string `json:"upgrade_firmware,omitempty"`
 }
+
+// DiffChangeDTO describes an individual change in a diff.
+type DiffChangeDTO struct {
+	Action      string `json:"action"` // "add", "delete", "update"
+	Address     string `json:"address"`
+	OldComment  string `json:"old_comment,omitempty"`
+	NewComment  string `json:"new_comment,omitempty"`
+	OldDisabled *bool  `json:"old_disabled,omitempty"`
+	NewDisabled *bool  `json:"new_disabled,omitempty"`
+}
+
+// DiffSummaryDTO describes aggregated counts of changes in a diff.
+type DiffSummaryDTO struct {
+	Total  int `json:"total"`
+	Add    int `json:"add"`
+	Delete int `json:"delete"`
+	Update int `json:"update"`
+}
+
+// DiffReportDTO represents a full diff result in JSON format.
+type DiffReportDTO struct {
+	Changes []DiffChangeDTO `json:"changes"`
+	Summary DiffSummaryDTO  `json:"summary"`
+}
+
+// SnapshotDTO represents snapshot metadata in JSON format.
+type SnapshotDTO struct {
+	ID        string `json:"id"`
+	Host      string `json:"host"`
+	ListName  string `json:"list_name"`
+	CreatedAt string `json:"created_at"`
+	Total     int    `json:"total"`
+}
+

@@ -9,8 +9,10 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/dnsresolver"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/snapshot"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/source"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/syncer"
 )
 
@@ -22,20 +24,26 @@ var syncConcurrency int
 var syncWatch bool
 var syncWatchInterval int
 var syncForce bool
+var syncResolveDomains bool
+var syncDNS string
+var syncNoSnapshot bool
 
 var syncCmd = &cobra.Command{
-	Use:   "sync [file]",
-	Short: "Синхронизировать address-list из файла в MikroTik",
-	Long: `Читает файл (или stdin если '-'), вычисляет diff с текущим состоянием
+	Use:   "sync [file|url]",
+	Short: "Синхронизировать address-list из файла или URL в MikroTik",
+	Long: `Читает файл или URL (или stdin если '-'), вычисляет diff с текущим состоянием
 address-list на MikroTik и применяет изменения.
 
-При нескольких списках один и тот же файл синхронизируется в каждый список последовательно.
+Перед применением изменений автоматически создается локальный снимок (snapshot) для отката.
+
+При нескольких списках один и тот же источник синхронизируется в каждый список последовательно.
 
 Примеры:
-  mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes
-  mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -n
-  mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l list1,list2
-  mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l list1 -l list2 -y`,
+  mlm sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes
+  mlm sync https://example.com/vpn.lst -H 192.168.1.1 -u admin -l vpn-routes
+  mlm sync domains.txt -H 192.168.1.1 -u admin -l vpn-routes --resolve-domains
+  mlm sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -n
+  mlm sync vpn.list -H 192.168.1.1 -u admin -l list1,list2 -y`,
 	Args: cobra.ExactArgs(1),
 	RunE: runSync,
 }
@@ -53,6 +61,9 @@ func init() {
 	syncCmd.Flags().BoolVarP(&syncWatch, "watch", "w", false, "Следить за файлом и пересинхронизировать при изменении")
 	syncCmd.Flags().IntVar(&syncWatchInterval, "watch-interval", 3, "Интервал проверки файла в секундах (с --watch)")
 	syncCmd.Flags().BoolVarP(&syncForce, "force", "y", false, "Не запрашивать подтверждение при массовом удалении записей")
+	syncCmd.Flags().BoolVar(&syncResolveDomains, "resolve-domains", false, "Разрешать доменные имена в IP-адреса через DNS")
+	syncCmd.Flags().StringVar(&syncDNS, "dns", "", "Пользовательский DNS-сервер для резолвинга (например: 1.1.1.1:53)")
+	syncCmd.Flags().BoolVar(&syncNoSnapshot, "no-snapshot", false, "Не создавать автоматический снимок перед применением изменений")
 }
 
 func runSync(cmd *cobra.Command, args []string) error {
@@ -85,21 +96,30 @@ func runSync(cmd *cobra.Command, args []string) error {
 		effectiveFormat = loadedConfig.DefaultFormat
 	}
 
-	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(syncFlags.skipTLSVerify))
+	client := newClient(host, user, pass, resolveSkipTLS(syncFlags.skipTLSVerify))
 	ctx := cmd.Context()
+	proxyURL := resolveProxy(proxyFlag)
 
 	if info, err := client.GetRouterInfo(ctx); err == nil {
 		output.RouterBanner(routerBannerInfo(info, host))
 	}
 
 	doSync := func() error {
-		content, err := readFileOrStdin(args[0])
+		content, err := source.ReadWithProxy(ctx, args[0], proxyURL)
 		if err != nil {
-			return fmt.Errorf("чтение файла: %w", err)
+			return fmt.Errorf("чтение источника: %w", err)
 		}
 		entries, err := parseContent(content, effectiveFormat)
 		if err != nil {
 			return err
+		}
+
+		if syncResolveDomains {
+			res, _ := dnsresolver.ResolveEntries(ctx, entries, syncDNS, proxyURL)
+			for _, w := range res.Warnings {
+				output.Warn(w)
+			}
+			entries = res.Entries
 		}
 
 		for _, listName := range listNames {
@@ -111,10 +131,10 @@ func runSync(cmd *cobra.Command, args []string) error {
 			if err != nil {
 				return fmt.Errorf("получение списка %q: %w", listName, err)
 			}
-			output.Info(fmt.Sprintf("На роутере: %d записей, в файле: %d записей", len(current), len(entries)))
+			output.Info(fmt.Sprintf("На роутере: %d записей, в источнике: %d записей", len(current), len(entries)))
 			changes, duplicates := syncer.Diff(entries, current)
 			for _, addr := range duplicates {
-				output.Warn(fmt.Sprintf("дубль в файле: %s (используется последнее вхождение)", addr))
+				output.Warn(fmt.Sprintf("дубль в источнике: %s (используется последнее вхождение)", addr))
 			}
 			if len(changes) == 0 {
 				output.Info("Уже синхронизировано.")
@@ -143,6 +163,15 @@ func runSync(cmd *cobra.Command, args []string) error {
 					} else {
 						return fmt.Errorf("безопасность: попытка массового удаления %d записей из %d в списке %q. Используйте --force (-y)", deleteCount, len(current), listName)
 					}
+				}
+			}
+
+			if !syncDryRun && !syncNoSnapshot && len(changes) > 0 {
+				snapMeta, sErr := snapshot.Save(host, listName, current)
+				if sErr != nil {
+					output.Warn(fmt.Sprintf("не удалось создать автоматический снимок: %v", sErr))
+				} else {
+					output.Info(fmt.Sprintf("Создан снимок для отката: %s (записей: %d)", snapMeta.ID, snapMeta.Total))
 				}
 			}
 

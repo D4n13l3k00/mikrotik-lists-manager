@@ -1,8 +1,8 @@
 package cli
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"sync"
@@ -12,9 +12,11 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/dnsresolver"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/parser"
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/source"
 )
 
 const appendRemoveProgressThreshold = 10
@@ -25,16 +27,19 @@ var appendFlags connFlags
 var appendDryRun bool
 var appendFormat string
 var appendConcurrency int
+var appendResolveDomains bool
+var appendDNS string
 
 var appendCmd = &cobra.Command{
-	Use:   "append [file]",
-	Short: "Добавить записи из файла в список на роутере, пропустив дубли",
-	Long: `Читает файл, получает текущий список с роутера и добавляет только те записи,
+	Use:   "append [file|url]",
+	Short: "Добавить записи из файла или URL в список на роутере, пропустив дубли",
+	Long: `Читает файл или URL, получает текущий список с роутера и добавляет только те записи,
 которых ещё нет. Существующие записи не трогает.
 
 Примеры:
-  mikrotik-lists-manager append extra.list -H 192.168.1.1 -u admin -l vpn-routes
-  mikrotik-lists-manager append extra.list -H 192.168.1.1 -u admin -l list1,list2 -n`,
+  mlm append extra.list -H 192.168.1.1 -u admin -l vpn-routes
+  mlm append https://example.com/ips.txt -H 192.168.1.1 -u admin -l vpn-routes
+  mlm append domains.lst -H 192.168.1.1 -u admin -l vpn-routes --resolve-domains`,
 	Args: cobra.ExactArgs(1),
 	RunE: runAppend,
 }
@@ -48,6 +53,8 @@ func init() {
 	appendCmd.Flags().BoolVarP(&appendDryRun, "dry-run", "n", false, "Показать изменения без применения")
 	appendCmd.Flags().StringVarP(&appendFormat, "format", "f", "auto", "Формат файла: auto, native, mikrotik")
 	appendCmd.Flags().IntVarP(&appendConcurrency, "concurrency", "c", 5, "Число параллельных запросов к API (0 = последовательно)")
+	appendCmd.Flags().BoolVar(&appendResolveDomains, "resolve-domains", false, "Разрешать доменные имена в IP-адреса через DNS")
+	appendCmd.Flags().StringVar(&appendDNS, "dns", "", "Пользовательский DNS-сервер для резолвинга (например: 1.1.1.1:53)")
 }
 
 func runAppend(cmd *cobra.Command, args []string) error {
@@ -71,7 +78,10 @@ func runAppend(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	content, err := readFileOrStdin(args[0])
+	ctx := cmd.Context()
+	proxyURL := resolveProxy(proxyFlag)
+
+	content, err := readFileOrStdin(ctx, args[0], proxyURL)
 	if err != nil {
 		return err
 	}
@@ -81,8 +91,15 @@ func runAppend(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(appendFlags.skipTLSVerify))
-	ctx := cmd.Context()
+	if appendResolveDomains {
+		res, _ := dnsresolver.ResolveEntries(ctx, entries, appendDNS, proxyURL)
+		for _, w := range res.Warnings {
+			output.Warn(w)
+		}
+		entries = res.Entries
+	}
+
+	client := newClient(host, user, pass, resolveSkipTLS(appendFlags.skipTLSVerify))
 	if info, err := client.GetRouterInfo(ctx); err == nil {
 		output.RouterBanner(routerBannerInfo(info, host))
 	}
@@ -194,8 +211,8 @@ var removeCmd = &cobra.Command{
 которые есть в файле. Записи которых нет в файле — не трогает.
 
 Примеры:
-  mikrotik-lists-manager remove telegram.list -H 192.168.1.1 -u admin -l vpn-routes
-  mikrotik-lists-manager remove telegram.list -H 192.168.1.1 -u admin -l list1,list2 -n`,
+  mlm remove telegram.list -H 192.168.1.1 -u admin -l vpn-routes
+  mlm remove telegram.list -H 192.168.1.1 -u admin -l list1,list2 -n`,
 	Args: cobra.ExactArgs(1),
 	RunE: runRemove,
 }
@@ -232,7 +249,10 @@ func runRemove(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	content, err := readFileOrStdin(args[0])
+	ctx := cmd.Context()
+	proxyURL := resolveProxy(proxyFlag)
+
+	content, err := readFileOrStdin(ctx, args[0], proxyURL)
 	if err != nil {
 		return err
 	}
@@ -250,8 +270,7 @@ func runRemove(cmd *cobra.Command, args []string) error {
 		notFoundOrig[key] = e.Address
 	}
 
-	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(removeFlags.skipTLSVerify))
-	ctx := cmd.Context()
+	client := newClient(host, user, pass, resolveSkipTLS(removeFlags.skipTLSVerify))
 	if info, err := client.GetRouterInfo(ctx); err == nil {
 		output.RouterBanner(routerBannerInfo(info, host))
 	}
@@ -370,15 +389,8 @@ func newProgressBar(total int, desc string) *progressbar.ProgressBar {
 	)
 }
 
-func readFileOrStdin(path string) ([]byte, error) {
-	if path == "-" {
-		return readStdin()
-	}
-	return os.ReadFile(path)
-}
-
-func readStdin() ([]byte, error) {
-	return io.ReadAll(os.Stdin)
+func readFileOrStdin(ctx context.Context, path string, proxyURL string) ([]byte, error) {
+	return source.ReadWithProxy(ctx, path, proxyURL)
 }
 
 func parseContent(content []byte, format string) ([]parser.Entry, error) {

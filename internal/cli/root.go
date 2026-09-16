@@ -33,6 +33,7 @@ var configFile string
 var profileFlag string
 var resolvedConfigFile string
 var configGlobal bool
+var proxyFlag string
 var loadedConfig config.Config
 
 // ── help styles ──────────────────────────────────────────────────────────────
@@ -128,17 +129,18 @@ func helpFunc(cmd *cobra.Command, args []string) {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "mikrotik-lists-manager",
-	Short: "Синхронизация address-list MikroTik из файла",
+	Use:     "mlm",
+	Aliases: []string{"mikrotik-lists-manager"},
+	Short:   "Синхронизация address-list MikroTik из файла",
 	Long: `Поддерживаемые форматы файлов:
   native    — IP/CIDR построчно, ## комментарий для MikroTik, # только локально
   mikrotik  — формат экспорта (/ip firewall address-list ... add address=...)
 
-Конфиг (опционально): .mikrotik-lists-manager.yaml в текущей директории.
-Создать шаблон: mikrotik-lists-manager config init
+Конфиг (опционально): .mlm.yaml в текущей директории.
+Создать шаблон: mlm config init
 
 Приоритет: флаг > переменная окружения > конфиг файл
-Переменные окружения: MT_HOST, MT_USER, MT_PASS, MT_LIST`,
+Переменные окружения: MT_HOST, MT_USER, MT_PASS, MT_LIST, MT_PROXY, MT_PROFILE`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if cmd.Parent() != nil && cmd.Parent().Name() == "config" {
 			return nil
@@ -167,21 +169,31 @@ var rootCmd = &cobra.Command{
 			List:          prof.List,
 			SkipTLSVerify: prof.Insecure(false),
 			DefaultFormat: prof.DefaultFormat,
+			Proxy:         prof.Proxy,
 		}
 		return nil
 	},
 }
 
 func Execute(v, commit string) {
-	if v != "" {
+	if v != "" && v != "dev" {
 		version.Version = v
 	}
-	if commit != "" {
+	if commit != "" && commit != "none" {
 		version.Commit = commit
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	rootCmd.Version = v + " (" + commit + ")"
+
+	if len(os.Args) > 0 {
+		binName := filepath.Base(os.Args[0])
+		binName = strings.TrimSuffix(strings.ToLower(binName), ".exe")
+		if binName == "mikrotik-lists-manager" {
+			rootCmd.Use = "mikrotik-lists-manager"
+		}
+	}
+
+	rootCmd.Version = version.Version + " (" + version.Commit + ")"
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		os.Exit(1)
 	}
@@ -190,9 +202,14 @@ func Execute(v, commit string) {
 func init() {
 	rootCmd.PersistentFlags().StringVar(&configFile, "config", "", "Путь к конфиг файлу (по умолчанию: автопоиск)")
 	rootCmd.PersistentFlags().StringVarP(&profileFlag, "profile", "P", "", "Имя профиля роутера из конфига [$MT_PROFILE]")
+	rootCmd.PersistentFlags().StringVar(&proxyFlag, "proxy", "", "URL прокси для внешних запросов и DNS (socks5://, socks5h://, http://, https://) [$MT_PROXY]")
 	rootCmd.AddCommand(syncCmd)
 	rootCmd.AddCommand(appendCmd)
 	rootCmd.AddCommand(removeCmd)
+	rootCmd.AddCommand(diffCmd)
+	rootCmd.AddCommand(validateCmd)
+	rootCmd.AddCommand(snapshotCmd)
+	rootCmd.AddCommand(rollbackCmd)
 	rootCmd.AddCommand(exportCmd)
 	rootCmd.AddCommand(optimizeCmd)
 	rootCmd.AddCommand(listCmd)
@@ -254,6 +271,20 @@ func resolveSkipTLS(flagVal bool) bool {
 		return true
 	}
 	return loadedConfig.SkipTLSVerify
+}
+
+func resolveProxy(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	if v := os.Getenv("MT_PROXY"); v != "" {
+		return v
+	}
+	return loadedConfig.Proxy
+}
+
+func newClient(host, user, pass string, skipTLS bool) *mikrotik.Client {
+	return mikrotik.NewClient(host, user, pass, skipTLS)
 }
 
 // resolveListNames returns the list of address-list names from flags, env, or config.
@@ -392,6 +423,15 @@ var configShowCmd = &cobra.Command{
 		output.KV("list", orEmpty(list), "")
 		output.KV("insecure", fmt.Sprintf("%v", prof.Insecure(false)), "")
 		output.KV("format", orDefault(prof.DefaultFormat, "auto"), "")
+		proxyVal := prof.Proxy
+		proxyHint := ""
+		if v := os.Getenv("MT_PROXY"); v != "" {
+			proxyVal = v
+			proxyHint = "из env"
+		} else if proxyVal != "" {
+			proxyHint = "из конфига"
+		}
+		output.KV("proxy", orEmpty(proxyVal), proxyHint)
 		fmt.Println()
 		return nil
 	},

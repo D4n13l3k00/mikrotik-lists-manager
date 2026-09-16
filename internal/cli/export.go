@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
 )
 
@@ -27,8 +26,8 @@ var exportCmd = &cobra.Command{
 При нескольких списках и -o файл содержит все списки подряд.
 
 Примеры:
-  mikrotik-lists-manager export -H 192.168.1.1 -u admin -l vpn-routes
-  mikrotik-lists-manager export -H 192.168.1.1 -u admin -l list1,list2 -f mikrotik -o backup.rsc`,
+  mlm export -H 192.168.1.1 -u admin -l vpn-routes
+  mlm export -H 192.168.1.1 -u admin -l list1,list2 -f mikrotik -o backup.rsc`,
 	RunE: runExport,
 }
 
@@ -68,7 +67,7 @@ func runExport(cmd *cobra.Command, args []string) error {
 		defer output.ResetWriter()
 	}
 
-	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(exportFlags.skipTLSVerify))
+	client := newClient(host, user, pass, resolveSkipTLS(exportFlags.skipTLSVerify))
 	ctx := cmd.Context()
 
 	var sb strings.Builder

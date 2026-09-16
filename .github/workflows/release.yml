@@ -92,13 +92,13 @@ jobs:
           ARCH="${GOARCH}"
           [ -n "$GOARM" ] && ARCH="armv${GOARM}"
 
-          NAME="mikrotik-lists-manager_${GOOS}_${ARCH}${EXT}"
+          NAME="mlm_${GOOS}_${ARCH}${EXT}"
 
           go build \
             -trimpath \
             -ldflags="-s -w -X main.version=${{ github.ref_name }} -X main.commit=${{ github.sha }}" \
             -o "dist/${NAME}" \
-            ./cmd/main/
+            ./cmd/mlm/
 
       - name: Compress (UPX)
         # UPX не поддерживает darwin arm64 и windows arm64 надёжно

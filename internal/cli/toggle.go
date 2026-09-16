@@ -29,8 +29,8 @@ var disableCmd = &cobra.Command{
 Не изменяет файл — только состояние на роутере.
 
 Примеры:
-  mikrotik-lists-manager disable 8.8.8.8 1.1.1.1 -H 192.168.1.1 -u admin -l VPN_LIST
-  mikrotik-lists-manager disable --all -H 192.168.1.1 -u admin -l list1,list2`,
+  mlm disable 8.8.8.8 1.1.1.1 -H 192.168.1.1 -u admin -l VPN_LIST
+  mlm disable --all -H 192.168.1.1 -u admin -l list1,list2`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSetDisabled(cmd.Context(), args, disableFlags, disableAll, true, disableConcurrency)
 	},
@@ -47,8 +47,8 @@ var enableCmd = &cobra.Command{
 Не изменяет файл — только состояние на роутере.
 
 Примеры:
-  mikrotik-lists-manager enable 8.8.8.8 1.1.1.1 -H 192.168.1.1 -u admin -l VPN_LIST
-  mikrotik-lists-manager enable --all -H 192.168.1.1 -u admin -l list1,list2`,
+  mlm enable 8.8.8.8 1.1.1.1 -H 192.168.1.1 -u admin -l VPN_LIST
+  mlm enable --all -H 192.168.1.1 -u admin -l list1,list2`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSetDisabled(cmd.Context(), args, enableFlags, enableAll, false, enableConcurrency)
 	},
@@ -99,7 +99,7 @@ func runSetDisabled(ctx context.Context, args []string, flags connFlags, all, di
 		return err
 	}
 
-	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(flags.skipTLSVerify))
+	client := newClient(host, user, pass, resolveSkipTLS(flags.skipTLSVerify))
 
 	targets := map[string]bool{}
 	if !all {

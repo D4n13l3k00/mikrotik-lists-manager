@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -36,5 +36,5 @@ jobs:
         if: runner.os == 'Linux'
         run: go test -v -race ./...
 
-      - name: Build Binary
-        run: go build -v ./cmd/main
+      - name: Build Binaries
+        run: go build -v ./...

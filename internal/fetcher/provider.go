@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/netutil"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/version"
 )
 
@@ -40,10 +41,21 @@ func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error
 
 // NewClient returns an http.Client with the given timeout and standard User-Agent.
 func NewClient(timeout time.Duration) *http.Client {
+	return NewClientWithProxy(timeout, "")
+}
+
+// NewClientWithProxy returns an http.Client with timeout, standard User-Agent and optional proxy.
+func NewClientWithProxy(timeout time.Duration, proxyURL string) *http.Client {
+	var base http.RoundTripper = http.DefaultTransport
+	if proxyURL != "" {
+		if tr, err := netutil.HTTPTransport(proxyURL, false); err == nil {
+			base = tr
+		}
+	}
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &userAgentTransport{
-			base: http.DefaultTransport,
+			base: base,
 			ua:   version.UserAgent(),
 		},
 	}

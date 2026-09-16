@@ -26,10 +26,10 @@ var listCmd = &cobra.Command{
 С флагом --entries показывает все записи конкретного списка.
 
 Примеры:
-  mikrotik-lists-manager list -H 192.168.1.1 -u admin
-  mikrotik-lists-manager list -H 192.168.1.1 -u admin -e vpn-routes
-  mikrotik-lists-manager list --json
-  mikrotik-lists-manager list -e vpn-routes --json`,
+  mlm list -H 192.168.1.1 -u admin
+  mlm list -H 192.168.1.1 -u admin -e vpn-routes
+  mlm list --json
+  mlm list -e vpn-routes --json`,
 	RunE: runList,
 }
 
@@ -96,7 +96,7 @@ func runList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(listFlags.skipTLSVerify))
+	client := newClient(host, user, pass, resolveSkipTLS(listFlags.skipTLSVerify))
 	ctx := cmd.Context()
 
 	if listEntries != "" {

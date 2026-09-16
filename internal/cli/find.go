@@ -8,7 +8,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
-	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/mikrotik"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/output"
 	"github.com/D4n13l3k00/mikrotik-lists-manager/internal/parser"
 )
@@ -26,9 +25,9 @@ var findCmd = &cobra.Command{
 	Long: `Ищет точное совпадение адреса, а также проверяет попадание IP в CIDR-записи и вложенность подсетей.
 
 Примеры:
-  mikrotik-lists-manager find 8.8.8.8 -H 192.168.1.1 -u admin
-  mikrotik-lists-manager find 192.168.0.0/16 -H 192.168.1.1 -u admin
-  mikrotik-lists-manager find 1.1.1.1 --json`,
+  mlm find 8.8.8.8 -H 192.168.1.1 -u admin
+  mlm find 192.168.0.0/16 -H 192.168.1.1 -u admin
+  mlm find 1.1.1.1 --json`,
 	Args: cobra.ExactArgs(1),
 	RunE: runFind,
 }
@@ -100,7 +99,7 @@ func runFind(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(findFlags.skipTLSVerify))
+	client := newClient(host, user, pass, resolveSkipTLS(findFlags.skipTLSVerify))
 	ctx := cmd.Context()
 
 	entries, err := client.GetAllEntries(ctx)

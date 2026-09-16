@@ -81,7 +81,8 @@ func init() {
 }
 
 func runFetch(cmd *cobra.Command, args []string) error {
-	client := fetcher.NewClient(time.Duration(fetchTimeout) * time.Second)
+	proxyURL := resolveProxy(proxyFlag)
+	client := fetcher.NewClientWithProxy(time.Duration(fetchTimeout)*time.Second, proxyURL)
 
 	asnProviders := parseASNProviders(fetchASNs)
 

@@ -1,6 +1,6 @@
-# 🛠 mikrotik-lists-manager
+# 🛠 mlm
 
-CLI утилита для управления firewall address-list на MikroTik из локального файла.
+CLI утилита для управления firewall address-list на MikroTik из локального файла или URL.
 
 Подключается к роутеру через REST API (RouterOS 7+), сравнивает текущее состояние списка с файлом и приводит его к нужному виду — добавляет, удаляет, обновляет и включает/отключает записи. Динамические записи (`dynamic=true`) не трогает.
 
@@ -8,10 +8,14 @@ CLI утилита для управления firewall address-list на MikroT
 
 - [Установка](#установка)
 - [Быстрый старт](#быстрый-старт)
-- [Формат файла](#формат-файла)
+- [Формат файла и источники данных](#формат-файла-и-источники-данных)
 - [Несколько списков](#несколько-списков)
+- [Поддержка прокси](#поддержка-прокси)
 - [Команды](#команды)
   - [sync](#sync--полная-синхронизация)
+  - [diff](#diff--сравнение-списков-оффлайн-и-с-роутером)
+  - [validate](#validate--валидация-и-проверка-списков)
+  - [snapshot / rollback](#snapshot--rollback--снимки-и-быстрый-откат)
   - [list](#list--просмотр-списков-на-роутере)
   - [append](#append--добавление-записей)
   - [remove](#remove--удаление-записей-по-файлу)
@@ -34,45 +38,81 @@ CLI утилита для управления firewall address-list на MikroT
 
 ## 📦 Установка
 
-Скачать готовый бинарь для своей платформы со [страницы релизов](https://github.com/D4n13l3k00/mikrotik-lists-manager/releases).
+### 1. Через Go пакетный менеджер (`go install`)
 
-Или собрать из исходников:
+Утилиту можно установить в систему одной командой через Go:
+
+```bash
+go install github.com/D4n13l3k00/mikrotik-lists-manager/cmd/mlm@latest
+```
+
+Бинарник `mlm` устанавливается в `$GOPATH/bin` (по умолчанию `~/go/bin`), который обычно уже находится в системной переменной `PATH`.
+
+---
+
+### 2. Готовые бинарные файлы
+
+Скачать готовый бинарник `mlm` для своей ОС и архитектуры (Linux, Windows, macOS, FreeBSD, ARM) со [страницы релизов](https://github.com/D4n13l3k00/mikrotik-lists-manager/releases).
+
+---
+
+### 3. Сборка из исходников
 
 ```bash
 git clone https://github.com/D4n13l3k00/mikrotik-lists-manager
 cd mikrotik-lists-manager
-go build -o mikrotik-lists-manager ./cmd/main/
+
+# Собрать и установить бинарник mlm в $GOPATH/bin:
+go install ./cmd/mlm
+
+# Или скомпилировать в текущую папку:
+go build -o mlm ./cmd/mlm
 ```
 
-**Требования:** RouterOS 7.x (REST API), Go 1.25+ для сборки.
+**Требования:** RouterOS 7.x (REST API), Go 1.23+ для сборки из исходников.
 
 ---
 
 ## 🚀 Быстрый старт
 
 ```bash
-# посмотреть что изменится, не применяя
-./mikrotik-lists-manager sync list.lst -H 192.168.1.1 -u admin -l vpn-routes -n
+# проверить синтаксис, неканонические маски и дубликаты
+mlm validate list.lst
 
-# применить
-./mikrotik-lists-manager sync list.lst -H 192.168.1.1 -u admin -l vpn-routes
+# сравнить два списка оффлайн перед применением
+mlm diff base.lst https://example.com/new.lst
+
+# синхронизировать список напрямую по URL (с автосозданием точки восстановления)
+mlm sync https://example.com/vpn.lst -H 192.168.1.1 -u admin -l vpn-routes
+
+# выполнить откат списка при необходимости
+mlm rollback -l vpn-routes -H 192.168.1.1 -u admin
 
 # посмотреть все списки на роутере
-./mikrotik-lists-manager list -H 192.168.1.1 -u admin
+mlm list -H 192.168.1.1 -u admin
 
 # скачать актуальные CIDR от провайдеров
-./mikrotik-lists-manager fetch -o ranges.lst
+mlm fetch -o ranges.lst
 ```
 
 Пароль будет запрошен интерактивно если не передан флагом `-p`.
 
 ---
 
-## 📄 Формат файла
+## 📄 Формат файла и источники данных
 
-Поддерживаются два формата.
+### Источники данных (`[file|url]`)
 
-### Native (`.list`)
+Во всех командах работы со списками (`sync`, `append`, `remove`, `optimize`, `diff`, `validate`) в качестве источника можно передавать:
+1. **Локальный файл**: `vpn.list`, `./lists/hosts.txt`
+2. **Прямой HTTP / HTTPS URL**: `https://raw.githubusercontent.com/.../list.lst`
+3. **Стандартный ввод (stdin)**: `-` (например: `curl -s https://... | mlm sync -`)
+
+---
+
+### Поддерживаемые форматы
+
+#### 1. Native (`.list`)
 
 Основной формат. Каждая строка — IP-адрес, CIDR или домен.
 
@@ -99,7 +139,7 @@ go build -o mikrotik-lists-manager ./cmd/main/
 149.154.160.0/20 ## TELEGRAM
 ```
 
-### MikroTik export (`.rsc`)
+#### 2. MikroTik export (`.rsc`)
 
 Формат вывода команды `/export` на роутере. Удобно для импорта существующего списка.
 
@@ -119,10 +159,60 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 Все команды принимают несколько списков через запятую или повторением флага:
 
 ```bash
-./mikrotik-lists-manager sync list.lst -l vpn,blocked
-./mikrotik-lists-manager sync list.lst -l vpn -l blocked
-./mikrotik-lists-manager disable -a -l vpn,blocked,whitelist
+mlm sync list.lst -l vpn,blocked
+mlm sync list.lst -l vpn -l blocked
+mlm disable -a -l vpn,blocked,whitelist
 ```
+
+---
+
+## 🌐 Поддержка прокси
+
+Утилита поддерживает работу через прокси-серверы для **внешних сетевых операций и DNS**:
+- Загрузка удаленных списков по URL (`sync`, `diff`, `validate`, `append`, `remove`, `optimize`).
+- Скачивание диапазонов провайдеров (`fetch`).
+- Локальный резолвинг доменов в IP (`--resolve-domains`) через туннелирование DNS-over-TCP (RFC 1035 / RFC 7766) через прокси-диалер.
+
+> **Примечание:** Подключение к REST API самого MikroTik всегда выполняется **напрямую (без прокси)**, так как роутер обычно находится в локальной или доверенной сети.
+
+### Поддерживаемые протоколы
+
+| Схема | Описание |
+|---|---|
+| `socks5://[user:pass@]host:port` | SOCKS5 с локальным DNS-резолвингом адреса прокси |
+| `socks5h://[user:pass@]host:port` | SOCKS5 с удаленным резолвингом доменных имен через прокси |
+| `http://[user:pass@]host:port` | HTTP CONNECT туннелирование (поддерживается Basic Auth) |
+| `https://[user:pass@]host:port` | HTTPS CONNECT туннелирование |
+
+### Способы указания
+
+1. **Глобальный флаг CLI** `--proxy`:
+   ```bash
+   mlm sync https://example.com/vpn.lst --proxy socks5://127.0.0.1:1080 -l vpn
+   mlm diff list1.lst list2.lst --proxy http://10.0.0.1:8080 --resolve-domains
+   mlm fetch -p cloudflare -o cf.lst --proxy socks5h://127.0.0.1:9050
+   ```
+
+2. **Переменная окружения** `MT_PROXY`:
+   ```bash
+   export MT_PROXY="socks5://127.0.0.1:1080"
+   mlm sync vpn.lst -l vpn
+   ```
+
+3. **В файле конфигурации** (глобально или внутри профилей роутеров):
+   ```yaml
+   # глобальный прокси по умолчанию
+   proxy: "socks5://127.0.0.1:1080"
+
+   profiles:
+     office:
+       host: "10.0.0.1"
+       user: "admin"
+       list: "office-routes"
+       proxy: "http://proxy.corp:8080"
+   ```
+
+Приоритет: `--proxy` флаг > `MT_PROXY` > профиль `proxy` > глобальный `proxy` в конфиге.
 
 ---
 
@@ -130,14 +220,16 @@ add list=vpn-routes address=91.108.4.0/22 comment="TELEGRAM"
 
 ### `sync` — полная синхронизация
 
-Читает файл, получает текущий список с роутера, вычисляет diff и приводит список на роутере к точному состоянию файла: добавляет отсутствующие, удаляет лишние, обновляет комментарии и состояние `disabled`.
+Читает файл или URL, получает текущий список с роутера, вычисляет diff и приводит список на роутере к точному состоянию источника: добавляет отсутствующие, удаляет лишние, обновляет комментарии и состояние `disabled`.
 
-Если запись в файле без `!`, но на роутере она `disabled=true` — включит обратно.
+Перед применением изменений автоматически создается локальный снимок (snapshot) для безопасного отката (отключается флагом `--no-snapshot`).
+
+Если запись в источнике без `!`, но на роутере она `disabled=true` — включит обратно.
 При 10+ изменениях показывает прогресс-бар. Флаг `-v` включает построчный вывод вместе с баром.
 API-запросы выполняются параллельно (флаг `-c`, по умолчанию 5). При подключении выводится баннер роутера.
 
 ```shell
-./mikrotik-lists-manager sync [file] [флаги]
+mlm sync [file|url] [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -149,30 +241,180 @@ API-запросы выполняются параллельно (флаг `-c`,
 | `--format` | `-f` | Формат файла: `auto`, `native`, `mikrotik` (по умолчанию `auto`) |
 | `--dry-run` | `-n` | Показать изменения без применения |
 | `--force` | `-y` | Пропустить подтверждение при массовом удалении (>50 записей или >50% списка) |
+| `--resolve-domains` | | Разрешать доменные имена в IP-адреса через DNS |
+| `--dns` | | Пользовательский DNS-сервер для резолвинга (например: `1.1.1.1:53`) |
+| `--no-snapshot` | | Не создавать автоматический снимок перед применением |
 | `--verbose` | `-v` | Выводить каждую запись даже при прогресс-баре |
 | `--concurrency` | `-c` | Число параллельных запросов к API (по умолчанию 5, 0 = последовательно) |
 | `--watch` | `-w` | Следить за файлом и пересинхронизировать при изменении |
 | `--watch-interval` | | Интервал проверки файла в секундах (по умолчанию 3, с `--watch`) |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
+| `--proxy` | | URL прокси-сервера (`socks5://`, `socks5h://`, `http://`, `https://`) |
 
 ```bash
-# обычная синхронизация
-./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes
+# обычная синхронизация файла
+mlm sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes
+
+# прямая синхронизация по HTTP/HTTPS URL
+mlm sync https://raw.githubusercontent.com/.../vpn.list -H 192.168.1.1 -u admin -l vpn-routes
+
+# синхронизация с локальным резолвингом доменов в IP
+mlm sync domains.txt -H 192.168.1.1 -u admin -l vpn-routes --resolve-domains
 
 # dry-run — только посмотреть diff
-./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -n
+mlm sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -n
 
 # синхронизировать в несколько списков (обрабатываются последовательно)
-./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn,blocked
+mlm sync vpn.list -H 192.168.1.1 -u admin -l vpn,blocked
 
 # из stdin
-cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-routes
+cat vpn.list | mlm sync - -H 192.168.1.1 -u admin -l vpn-routes
 
 # без подтверждения при массовом удалении
-./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -y
+mlm sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -y
 
 # следить за файлом и синхронизировать при каждом изменении
-./mikrotik-lists-manager sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -w
+mlm sync vpn.list -H 192.168.1.1 -u admin -l vpn-routes -w
+```
+
+---
+
+### `diff` — сравнение списков (оффлайн и с роутером)
+
+Позволяет наглядно увидеть разницу между двумя источниками:
+1. **Оффлайн-сравнение (2 аргумента)**: сравнивает два файла, URL или stdin без подключения к роутеру. Первый аргумент считается исходным (базовым), второй — целевым.
+2. **Сравнение со списком на роутере (1 аргумент + `-l`)**: подключается к MikroTik, считывает текущий address-list и сравнивает его с локальным файлом или URL.
+
+Выводит привычный unified-diff:
+- `+` (зелёный) — запись будет добавлена
+- `−` (красный) — запись будет удалена
+- `~` (жёлтый) — изменился комментарий или статус активности (`disabled`)
+
+```shell
+mlm diff <source1> [source2] [флаги]
+```
+
+| Флаг | Короткий | Описание |
+|------|----------|----------|
+| `--host` | `-H` | Адрес роутера (для режима сравнения с роутером) |
+| `--user` | `-u` | Имя пользователя API |
+| `--pass` | `-p` | Пароль |
+| `--list` | `-l` | Имя address-list на роутере |
+| `--format` | `-f` | Формат файлов: `auto`, `native`, `mikrotik` |
+| `--resolve-domains` | | Разрешать доменные имена в IP-адреса через DNS |
+| `--dns` | | Пользовательский DNS-сервер для резолвинга |
+| `--json` | | Вывод изменений и сводки в формате JSON |
+| `--insecure` | `-k` | Не проверять TLS сертификат |
+
+```bash
+# оффлайн сравнение двух локальных файлов
+mlm diff base.lst updated.lst
+
+# оффлайн сравнение локального файла с удаленным URL
+mlm diff local.lst https://example.com/remote.lst
+
+# сравнение файла с текущим состоянием списка на роутере
+mlm diff vpn.lst -l vpn-routes -H 192.168.1.1 -u admin
+
+# сравнение с локальным DNS-резолвингом доменов
+mlm diff domains.txt -l vpn-routes --resolve-domains
+
+# вывод diff в JSON для автоматизации
+mlm diff base.lst new.lst --json
+```
+
+---
+
+### `validate` — валидация и проверка списков
+
+Инструмент проверки и линтинга списков адресов перед применением или коммитом в репозиторий.
+Выполняет глубокий анализ:
+- **Синтаксис адресов**: проверка корректности IPv4, IPv6, CIDR и доменных имён.
+- **Неканонические подсети**: предупреждение о ненулевых битах хоста в CIDR (например `192.168.1.5/24` вместо `192.168.1.0/24`).
+- **Дубликаты**: поиск повторяющихся адресов внутри списка.
+- **Поглощённые подсети (shadowed subnets)**: обнаружение IP или подсетей, полностью перекрытых более широкими сетями в том же файле (например `10.0.1.0/24` внутри `10.0.0.0/16`).
+- **Метрики списка**: подсчёт хостов, подсетей, доменов, отключённых записей.
+
+```shell
+mlm validate <file|url> [флаги]
+```
+
+| Флаг | Короткий | Описание |
+|------|----------|----------|
+| `--strict` | | Считать предупреждения (warnings) ошибками (exit code 1) — для CI/CD |
+| `--json` | | Вывод структурированного отчёта в формате JSON |
+| `--format` | `-f` | Формат файла: `auto`, `native`, `mikrotik` |
+
+```bash
+# обычная проверка с выводом сводки в терминал
+mlm validate list.lst
+
+# проверка удаленного списка по ссылке
+mlm validate https://example.com/blocked.txt
+
+# строгий режим (любое предупреждение возвращает ненулевой код возврата)
+mlm validate list.lst --strict
+
+# машиночитаемый вывод отчёта для проверок в скриптах
+mlm validate list.lst --json
+```
+
+---
+
+### `snapshot` / `rollback` — снимки и быстрый откат
+
+Система создания локальных точек восстановления списков адресов и мгновенного возврата к предыдущему состоянию.
+
+- При выполнении `sync` снимок создаётся **автоматически** перед внесением изменений.
+- Снимки сохраняются локально в системной директории пользователя (`~/.config/mlm/snapshots/` или `%APPDATA%\mlm\snapshots\`).
+- Для каждого списка роутера автоматически сохраняются до 10 последних снимков (старые ротируются).
+
+#### Управление снимками (`snapshot`)
+
+```shell
+# просмотр истории снимков для списка
+mlm snapshot list -l vpn-routes -H 192.168.1.1 -u admin
+
+# просмотр истории снимков в формате JSON
+mlm snapshot list -l vpn-routes --json
+
+# создание снимка вручную перед экспериментами
+mlm snapshot create -l vpn-routes -H 192.168.1.1 -u admin
+
+# удаление снимка по ID
+mlm snapshot delete 20260916-120000_abcd -l vpn-routes -H 192.168.1.1
+```
+
+#### Восстановление состояния (`rollback`)
+
+Команда `rollback` восстанавливает состояние списка на роутере из снимка. По умолчанию восстанавливает самый свежий снимок (`latest`).
+
+```shell
+mlm rollback [флаги]
+```
+
+| Флаг | Короткий | Описание |
+|------|----------|----------|
+| `--host` | `-H` | Адрес роутера |
+| `--user` | `-u` | Имя пользователя API |
+| `--pass` | `-p` | Пароль |
+| `--list` | `-l` | Имя address-list |
+| `--id` | | ID конкретного снимка (по умолчанию `latest`) |
+| `--dry-run` | `-n` | Показать планируемые изменения отката без применения |
+| `--force` | `-y` | Пропустить подтверждение при массовом удалении записей |
+| `--concurrency` | `-c` | Число параллельных запросов к API |
+| `--verbose` | `-v` | Выводить каждую запись подробно |
+| `--insecure` | `-k` | Не проверять TLS сертификат |
+
+```bash
+# предварительный просмотр изменений при откате к последнему снимку
+mlm rollback -l vpn-routes -H 192.168.1.1 -u admin -n
+
+# откат списка к последней точке восстановления
+mlm rollback -l vpn-routes -H 192.168.1.1 -u admin
+
+# откат к конкретному снимку из истории
+mlm rollback -l vpn-routes --id 20260916-120000_abcd -H 192.168.1.1 -u admin
 ```
 
 ---
@@ -182,7 +424,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 Показывает все address-list на роутере с количеством записей и сколько из них отключено. При выводе записей конкретного списка (`-e`) они сортируются натуральным образом по IP/CIDR.
 
 ```shell
-./mikrotik-lists-manager list [флаги]
+mlm list [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -198,32 +440,32 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 ```bash
 # все списки
-./mikrotik-lists-manager list -H 192.168.1.1 -u admin
+mlm list -H 192.168.1.1 -u admin
 
 # в формате JSON
-./mikrotik-lists-manager list -H 192.168.1.1 -u admin --json
+mlm list -H 192.168.1.1 -u admin --json
 
 # по убыванию размера
-./mikrotik-lists-manager list -H 192.168.1.1 -u admin --sort size
+mlm list -H 192.168.1.1 -u admin --sort size
 
 # только списки с "vpn" в имени
-./mikrotik-lists-manager list -H 192.168.1.1 -u admin -F vpn
+mlm list -H 192.168.1.1 -u admin -F vpn
 
 # все записи конкретного списка
-./mikrotik-lists-manager list -H 192.168.1.1 -u admin -e vpn-routes
+mlm list -H 192.168.1.1 -u admin -e vpn-routes
 
 # записи списка в формате JSON
-./mikrotik-lists-manager list -H 192.168.1.1 -u admin -e vpn-routes --json
+mlm list -H 192.168.1.1 -u admin -e vpn-routes --json
 ```
 
 ---
 
 ### `append` — добавление записей
 
-Добавляет в список на роутере только те записи из файла, которых там ещё нет. Существующие записи не трогает и не обновляет.
+Добавляет в список на роутере только те записи из файла или URL, которых там ещё нет. Существующие записи не трогает и не обновляет.
 
 ```shell
-./mikrotik-lists-manager append [file] [флаги]
+mlm append [file|url] [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -234,15 +476,23 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 | `--list` | `-l` | Имя address-list, можно несколько |
 | `--format` | `-f` | Формат файла: `auto`, `native`, `mikrotik` |
 | `--dry-run` | `-n` | Показать изменения без применения |
+| `--resolve-domains` | | Разрешать доменные имена в IP-адреса через DNS |
+| `--dns` | | Пользовательский DNS-сервер для резолвинга |
 | `--concurrency` | `-c` | Число параллельных запросов к API (по умолчанию 5, 0 = последовательно) |
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
-# добавить новые записи, дубли пропустить
-./mikrotik-lists-manager append extra.list -H 192.168.1.1 -u admin -l vpn-routes
+# добавить новые записи из локального файла, дубли пропустить
+mlm append extra.list -H 192.168.1.1 -u admin -l vpn-routes
+
+# добавить записи напрямую по URL
+mlm append https://example.com/new-ips.txt -H 192.168.1.1 -u admin -l vpn-routes
+
+# добавить домены с предварительным резолвингом в IP
+mlm append domains.lst -H 192.168.1.1 -u admin -l vpn-routes --resolve-domains
 
 # добавить в несколько списков сразу
-./mikrotik-lists-manager append extra.list -H 192.168.1.1 -u admin -l vpn,blocked
+mlm append extra.list -H 192.168.1.1 -u admin -l vpn,blocked
 ```
 
 ---
@@ -252,7 +502,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 Удаляет с роутера только те записи, которые перечислены в файле. Остальные записи в списке не трогает. Если адрес из файла не найден на роутере — выводит предупреждение.
 
 ```shell
-./mikrotik-lists-manager remove [file] [флаги]
+mlm remove [file] [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -268,10 +518,10 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 ```bash
 # удалить записи из файла, остальные оставить
-./mikrotik-lists-manager remove telegram.list -H 192.168.1.1 -u admin -l vpn-routes
+mlm remove telegram.list -H 192.168.1.1 -u admin -l vpn-routes
 
 # посмотреть что удалится
-./mikrotik-lists-manager remove telegram.list -H 192.168.1.1 -u admin -l vpn-routes -n
+mlm remove telegram.list -H 192.168.1.1 -u admin -l vpn-routes -n
 ```
 
 ---
@@ -281,7 +531,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 Получает текущий список с роутера и выводит его в stdout или файл. При нескольких списках и `-o` все списки записываются в один файл подряд.
 
 ```shell
-./mikrotik-lists-manager export [флаги]
+mlm export [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -296,13 +546,13 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 ```bash
 # вывести в терминал
-./mikrotik-lists-manager export -H 192.168.1.1 -u admin -l vpn-routes
+mlm export -H 192.168.1.1 -u admin -l vpn-routes
 
 # сохранить несколько списков в один файл
-./mikrotik-lists-manager export -H 192.168.1.1 -u admin -l vpn,blocked -o backup.list
+mlm export -H 192.168.1.1 -u admin -l vpn,blocked -o backup.list
 
 # сохранить в формате MikroTik export
-./mikrotik-lists-manager export -H 192.168.1.1 -u admin -l vpn-routes -f mikrotik -o backup.rsc
+mlm export -H 192.168.1.1 -u admin -l vpn-routes -f mikrotik -o backup.rsc
 ```
 
 ---
@@ -313,8 +563,8 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 **Не изменяет локальный файл** — только состояние на роутере.
 
 ```shell
-./mikrotik-lists-manager enable [адрес...] [флаги]
-./mikrotik-lists-manager disable [адрес...] [флаги]
+mlm enable [адрес...] [флаги]
+mlm disable [адрес...] [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -329,43 +579,46 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 
 ```bash
 # отключить конкретные записи
-./mikrotik-lists-manager disable 8.8.8.8 1.1.1.1 -H 192.168.1.1 -u admin -l vpn-routes
+mlm disable 8.8.8.8 1.1.1.1 -H 192.168.1.1 -u admin -l vpn-routes
 
 # включить конкретные записи
-./mikrotik-lists-manager enable 8.8.8.8 -H 192.168.1.1 -u admin -l vpn-routes
+mlm enable 8.8.8.8 -H 192.168.1.1 -u admin -l vpn-routes
 
 # отключить несколько списков целиком
-./mikrotik-lists-manager disable -a -H 192.168.1.1 -u admin -l vpn,blocked
+mlm disable -a -H 192.168.1.1 -u admin -l vpn,blocked
 
 # включить весь список
-./mikrotik-lists-manager enable -a -H 192.168.1.1 -u admin -l vpn-routes
+mlm enable -a -H 192.168.1.1 -u admin -l vpn-routes
 ```
 
 ---
 
 ### `optimize` — оптимизация файла
 
-Читает native `.list` файл и выполняет:
+Читает native `.list` файл или URL и выполняет:
 - удаление дублирующихся адресов и доменов
 - удаление IP/CIDR которые полностью покрываются более широкой подсетью
 - конвертацию `x.x.x.x/32` в `x.x.x.x`
 
-По умолчанию выводит результат в stdout. С флагом `-w` перезаписывает файл.
+По умолчанию выводит результат в stdout. С флагом `-w` перезаписывает локальный файл.
 
 ```shell
-./mikrotik-lists-manager optimize [file] [флаги]
+mlm optimize [file|url] [флаги]
 ```
 
 | Флаг | Короткий | Описание |
 |------|----------|----------|
-| `--write` | `-w` | Перезаписать файл вместо вывода в stdout |
+| `--write` | `-w` | Перезаписать файл вместо вывода в stdout (только для локальных файлов) |
 
 ```bash
 # посмотреть что будет изменено
-./mikrotik-lists-manager optimize list.lst
+mlm optimize list.lst
 
-# применить оптимизацию
-./mikrotik-lists-manager optimize list.lst -w
+# скачать удаленный список, оптимизировать и сохранить в файл
+mlm optimize https://example.com/huge.lst > list.lst
+
+# применить оптимизацию с перезаписью файла
+mlm optimize list.lst -w
 ```
 
 ---
@@ -377,7 +630,7 @@ cat vpn.list | ./mikrotik-lists-manager sync - -H 192.168.1.1 -u admin -l vpn-ro
 Без флагов запускает интерактивный TUI для выбора провайдеров и сервисов.
 
 ```shell
-./mikrotik-lists-manager fetch [флаги]
+mlm fetch [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -436,35 +689,35 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 ```bash
 # интерактивный TUI-выбор
-./mikrotik-lists-manager fetch -o ranges.lst
+mlm fetch -o ranges.lst
 
 # все провайдеры сразу
-./mikrotik-lists-manager fetch -a -o ranges.lst
+mlm fetch -a -o ranges.lst
 
 # конкретные провайдеры
-./mikrotik-lists-manager fetch -p cloudflare,telegram -o ranges.lst
+mlm fetch -p cloudflare,telegram -o ranges.lst
 
 # GitHub — только Copilot и Web
-./mikrotik-lists-manager fetch -p github/copilot,github/web -o ranges.lst
+mlm fetch -p github/copilot,github/web -o ranges.lst
 
 # Oracle — конкретные регионы
-./mikrotik-lists-manager fetch -p oracle/eu-frankfurt-1,oracle/us-ashburn-1 -o ranges.lst
+mlm fetch -p oracle/eu-frankfurt-1,oracle/us-ashburn-1 -o ranges.lst
 
 # смешанно
-./mikrotik-lists-manager fetch -p cloudflare,telegram,github/copilot -o ranges.lst
+mlm fetch -p cloudflare,telegram,github/copilot -o ranges.lst
 
 # произвольный ASN
-./mikrotik-lists-manager fetch -A AS55222 -o pornhub.lst
-./mikrotik-lists-manager fetch -A 12345,67890 -o custom.lst
+mlm fetch -A AS55222 -o pornhub.lst
+mlm fetch -A 12345,67890 -o custom.lst
 
 # ASN вместе с провайдерами
-./mikrotik-lists-manager fetch -A AS203502 -p telegram -o combined.lst
+mlm fetch -A AS203502 -p telegram -o combined.lst
 
 # вывод в формате MikroTik RSC скрипта
-./mikrotik-lists-manager fetch -p cloudflare,telegram -f mikrotik -o ranges.rsc
+mlm fetch -p cloudflare,telegram -f mikrotik -o ranges.rsc
 
 # обновить только изменившиеся секции в существующем файле
-./mikrotik-lists-manager fetch -p cloudflare,telegram -m -o ranges.lst
+mlm fetch -p cloudflare,telegram -m -o ranges.lst
 ```
 
 Если провайдер недоступен — выводится предупреждение, остальные продолжают скачиваться.
@@ -476,7 +729,7 @@ Oracle поддерживает выбор регионов через `/`: `ora
 Ищет IP или CIDR во всех address-list на роутере. Находит точные совпадения (с канонической нормализацией), а также проверяет попадание IP в CIDR-записи и вложенность подсетей (CIDR в CIDR).
 
 ```shell
-./mikrotik-lists-manager find <address> [флаги]
+mlm find <address> [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -489,13 +742,13 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 ```bash
 # найти конкретный IP (включая попадание в CIDR-записи)
-./mikrotik-lists-manager find 8.8.8.8 -H 192.168.1.1 -u admin
+mlm find 8.8.8.8 -H 192.168.1.1 -u admin
 
 # найти все записи, входящие в подсеть или содержащие её
-./mikrotik-lists-manager find 8.8.0.0/16 -H 192.168.1.1 -u admin
+mlm find 8.8.0.0/16 -H 192.168.1.1 -u admin
 
 # вывод в JSON
-./mikrotik-lists-manager find 1.1.1.1 -H 192.168.1.1 -u admin --json
+mlm find 1.1.1.1 -H 192.168.1.1 -u admin --json
 ```
 
 ---
@@ -505,7 +758,7 @@ Oracle поддерживает выбор регионов через `/`: `ora
 Сохраняет все статические address-list с роутера в папку — один файл на список.
 
 ```shell
-./mikrotik-lists-manager backup [флаги]
+mlm backup [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -519,10 +772,10 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 ```bash
 # сохранить все списки в папку ./backup
-./mikrotik-lists-manager backup -H 192.168.1.1 -u admin -o ./backup
+mlm backup -H 192.168.1.1 -u admin -o ./backup
 
 # в формате MikroTik RSC
-./mikrotik-lists-manager backup -H 192.168.1.1 -u admin -o ./backup -f mikrotik
+mlm backup -H 192.168.1.1 -u admin -o ./backup -f mikrotik
 ```
 
 ---
@@ -532,7 +785,7 @@ Oracle поддерживает выбор регионов через `/`: `ora
 Переименовывает address-list на роутере, обновляя поле `list` у всех его записей через REST API параллельно с прогресс-баром.
 
 ```shell
-./mikrotik-lists-manager rename <old-name> <new-name> [флаги]
+mlm rename <old-name> <new-name> [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -544,7 +797,7 @@ Oracle поддерживает выбор регионов через `/`: `ora
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
-./mikrotik-lists-manager rename vpn-old vpn-routes -H 192.168.1.1 -u admin
+mlm rename vpn-old vpn-routes -H 192.168.1.1 -u admin
 ```
 
 ---
@@ -554,7 +807,7 @@ Oracle поддерживает выбор регионов через `/`: `ora
 Подключается к роутеру и выводит информационный блок: модель, RouterOS, CPU, память, аптайм, прошивка RouterBoard. Поддерживает вывод в формате JSON.
 
 ```shell
-./mikrotik-lists-manager info [флаги]
+mlm info [флаги]
 ```
 
 | Флаг | Короткий | Описание |
@@ -566,10 +819,10 @@ Oracle поддерживает выбор регионов через `/`: `ora
 | `--insecure` | `-k` | Не проверять TLS сертификат |
 
 ```bash
-./mikrotik-lists-manager info -H 192.168.1.1 -u admin
+mlm info -H 192.168.1.1 -u admin
 
 # вывод в JSON
-./mikrotik-lists-manager info -H 192.168.1.1 -u admin --json
+mlm info -H 192.168.1.1 -u admin --json
 ```
 
 ---
@@ -579,18 +832,18 @@ Oracle поддерживает выбор регионов через `/`: `ora
 Генерирует скрипт автодополнения команд и флагов для популярных оболочек.
 
 ```shell
-./mikrotik-lists-manager completion [bash|zsh|fish|powershell]
+mlm completion [bash|zsh|fish|powershell]
 ```
 
 ```bash
 # Bash
-./mikrotik-lists-manager completion bash > /etc/bash_completion.d/mikrotik-lists-manager
+mlm completion bash > /etc/bash_completion.d/mlm
 
 # Zsh
-./mikrotik-lists-manager completion zsh > "${fpath[1]}/_mikrotik-lists-manager"
+mlm completion zsh > "${fpath[1]}/_mlm"
 
 # Fish
-./mikrotik-lists-manager completion fish > ~/.config/fish/completions/mikrotik-lists-manager.fish
+mlm completion fish > ~/.config/fish/completions/mlm.fish
 ```
 
 ---
@@ -599,17 +852,17 @@ Oracle поддерживает выбор регионов через `/`: `ora
 
 #### `config init`
 
-Создаёт шаблон конфигурационного файла. По умолчанию создаёт `.mikrotik-lists-manager.yaml` в текущей директории. С флагом `-g` (`--global`) создаёт конфиг в глобальной директории пользователя.
+Создаёт шаблон конфигурационного файла. По умолчанию создаёт `.mlm.yaml` в текущей директории. С флагом `-g` (`--global`) создаёт конфиг в глобальной директории пользователя.
 
 ```bash
 # в текущей директории
-./mikrotik-lists-manager config init
+mlm config init
 
-# в глобальной пользовательской директории (~/.config/mikrotik-lists-manager/config.yaml или %APPDATA%)
-./mikrotik-lists-manager config init -g
+# в глобальной пользовательской директории (~/.config/mlm/config.yaml или %APPDATA%)
+mlm config init -g
 
 # по произвольному пути
-./mikrotik-lists-manager config init --config /etc/vpn/config.yaml
+mlm config init --config /etc/vpn/config.yaml
 ```
 
 #### `config show`
@@ -617,10 +870,10 @@ Oracle поддерживает выбор регионов через `/`: `ora
 Показывает итоговую конфигурацию с учётом файла, активного профиля и переменных окружения. Пароль маскируется.
 
 ```bash
-./mikrotik-lists-manager config show
+mlm config show
 
 # показать параметры конкретного профиля
-./mikrotik-lists-manager config show -P office
+mlm config show -P office
 ```
 
 ---
@@ -630,9 +883,9 @@ Oracle поддерживает выбор регионов через `/`: `ora
 ### Автопоиск конфига
 
 Если путь к конфигу не передан явно через `--config`, утилита ищет его по следующей цепочке:
-1. Текущая директория: `./.mikrotik-lists-manager.yaml`
-2. Глобальная директория пользователя: `~/.config/mikrotik-lists-manager/config.yaml` (Linux/macOS) или `%APPDATA%\mikrotik-lists-manager\config.yaml` (Windows)
-3. Домашняя директория пользователя: `~/.mikrotik-lists-manager.yaml`
+1. Текущая директория: `./.mlm.yaml` (с обратной поддержкой `.mikrotik-lists-manager.yaml`)
+2. Глобальная директория пользователя: `~/.config/mlm/config.yaml` (Linux/macOS) или `%APPDATA%\mlm\config.yaml` (Windows)
+3. Домашняя директория пользователя: `~/.mlm.yaml`
 
 Приоритет для каждого параметра: **CLI флаг > переменная окружения > выбранный профиль > глобальные настройки конфига > значения по умолчанию**.
 
@@ -641,7 +894,7 @@ Oracle поддерживает выбор регионов через `/`: `ora
 Конфиг поддерживает несколько профилей роутеров (например, домашний и офисный роутер). Для переключения используется флаг `-P` (`--profile`) или переменная окружения `MT_PROFILE`.
 
 ```yaml
-# .mikrotik-lists-manager.yaml
+# .mlm.yaml
 
 # Профиль по умолчанию (если не указан -P)
 default_profile: "home"
@@ -651,6 +904,7 @@ user: "admin"
 pass: ""            # лучше оставить пустым — спросит интерактивно
 insecure: false
 default_format: auto
+proxy: "socks5://127.0.0.1:1080" # socks5, socks5h, http, https
 
 # Профили роутеров
 profiles:
@@ -663,30 +917,31 @@ profiles:
     user: "network-admin"
     list: "office-vpn"
     insecure: true
+    proxy: "http://proxy.corp:8080"
 ```
 
 Использование профилей:
 
 ```bash
 # использовать профиль по умолчанию (home)
-./mikrotik-lists-manager list
+mlm list
 
 # использовать профиль office
-./mikrotik-lists-manager list -P office
-./mikrotik-lists-manager sync vpn.list -P office
+mlm list -P office
+mlm sync vpn.list -P office
 ```
 
 После создания конфига команды становятся короче:
 
 ```bash
-./mikrotik-lists-manager sync list.lst -n
-./mikrotik-lists-manager sync list.lst
-./mikrotik-lists-manager list
-./mikrotik-lists-manager append extra.list
-./mikrotik-lists-manager remove telegram.list -n
-./mikrotik-lists-manager export -o backup.list
-./mikrotik-lists-manager disable -a
-./mikrotik-lists-manager fetch -o ranges.lst
+mlm sync list.lst -n
+mlm sync list.lst
+mlm list
+mlm append extra.list
+mlm remove telegram.list -n
+mlm export -o backup.list
+mlm disable -a
+mlm fetch -o ranges.lst
 ```
 
 ---
@@ -700,26 +955,33 @@ profiles:
 | `MT_PASS` | `-p` / `--pass` |
 | `MT_LIST` | `-l` / `--list` |
 | `MT_PROFILE` | `-P` / `--profile` |
+| `MT_PROXY` | `--proxy` |
 
 ```bash
 export MT_HOST=192.168.1.1
 export MT_USER=admin
 export MT_LIST=vpn-routes
 
-./mikrotik-lists-manager sync list.lst -n
-./mikrotik-lists-manager list
-./mikrotik-lists-manager disable -a
+mlm sync list.lst -n
+mlm list
+mlm disable -a
 ```
 
 ---
 
-## 🔍 Сравнение команд
+## 🔍 Сравнение команд работы со списками
 
-| Команда | Добавляет | Удаляет | Обновляет | Трогает только из файла |
-|---------|-----------|---------|-----------|------------------------|
-| `sync` | ✓ | ✓ | ✓ | — (полная синхронизация) |
-| `append` | ✓ | — | — | ✓ |
-| `remove` | — | ✓ | — | ✓ |
+| Команда | Назначение | Добавляет | Удаляет | Обновляет | Требует роутер |
+|---|---|:---:|:---:|:---:|:---:|
+| `sync` | Полная синхронизация со снимком перед применением | ✓ | ✓ | ✓ | ✓ |
+| `rollback` | Быстрый откат списка к точке восстановления | ✓ | ✓ | ✓ | ✓ |
+| `diff` | Сравнение двух списков оффлайн или со списком на роутере | — | — | — | Опционально |
+| `validate` | Проверка синтаксиса, некорректных масок и дубликатов | — | — | — | ✗ |
+| `append` | Добавление недостающих записей без удаления | ✓ | — | — | ✓ |
+| `remove` | Точечное удаление записей по файлу/URL | — | ✓ | — | ✓ |
+| `optimize` | Локальная оптимизация и сжатие подсетей | — | — | — | ✗ |
+| `export` | Экспорт списка в файл или stdout | — | — | — | ✓ |
+| `backup` | Резервное копирование всех списков в файлы | — | — | — | ✓ |
 
 ---
 

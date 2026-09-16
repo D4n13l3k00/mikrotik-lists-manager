@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import "github.com/D4n13l3k00/mikrotik-lists-manager/internal/cli"
 

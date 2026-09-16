@@ -1,6 +1,8 @@
 # binary
-mikrotik-lists-manager
-mikrotik-lists-manager.exe
+/mikrotik-lists-manager
+/mikrotik-lists-manager.exe
+/mlm
+/mlm.exe
 
 # list files
 *.lst
@@ -9,6 +11,7 @@ mikrotik-lists-manager.exe
 
 # config
 .mikrotik-lists-manager.yaml
+.mlm.yaml
 
 # build artifacts
 dist/

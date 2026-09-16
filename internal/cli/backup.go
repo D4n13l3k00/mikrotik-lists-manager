@@ -24,8 +24,8 @@ var backupCmd = &cobra.Command{
 Форматы: native (по умолчанию) или mikrotik (.rsc).
 
 Примеры:
-  mikrotik-lists-manager backup -H 192.168.1.1 -u admin -o ./backup
-  mikrotik-lists-manager backup -H 192.168.1.1 -u admin -o ./backup -f mikrotik`,
+  mlm backup -H 192.168.1.1 -u admin -o ./backup
+  mlm backup -H 192.168.1.1 -u admin -o ./backup -f mikrotik`,
 	RunE: runBackup,
 }
 
@@ -54,7 +54,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := mikrotik.NewClient(host, user, pass, resolveSkipTLS(backupFlags.skipTLSVerify))
+	client := newClient(host, user, pass, resolveSkipTLS(backupFlags.skipTLSVerify))
 	ctx := cmd.Context()
 
 	entries, err := client.GetAllEntries(ctx)
